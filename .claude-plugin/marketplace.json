@@ -1,0 +1,7 @@
+{
+  "name": "spec100-marketplace",
+  "owner": { "name": "SPEC-100 maintainers" },
+  "plugins": [
+    { "name": "spec100", "source": "./plugins/spec100", "description": "Install and run a project-specific agent harness inside Claude Code", "version": "1.0.1" }
+  ]
+}

@@ -1,0 +1,18 @@
+name: Plugin checks
+on: [push, pull_request]
+jobs:
+  check:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: ['22.13.0', '24']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npm run check
+      - name: Ensure committed runtime matches source
+        run: git diff --exit-code -- plugins/spec100/runtime/spec100.cjs
