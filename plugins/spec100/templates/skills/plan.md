@@ -1,7 +1,6 @@
 ---
 name: spec100-plan
 description: Create an actionable plan from topic research or a direct user request.
-disable-model-invocation: true
 argument-hint: "<topic> [request]"
 ---
 

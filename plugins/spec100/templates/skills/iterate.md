@@ -1,7 +1,6 @@
 ---
 name: spec100-iterate
 description: Revise a selected plan from feedback and preserve its previous version.
-disable-model-invocation: true
 argument-hint: "<topic> <feedback>"
 ---
 

@@ -1,7 +1,6 @@
 ---
 name: setup
 description: Initialize or repair the SPEC-100 project harness, context, agents, skills, index, and verification hooks.
-disable-model-invocation: true
 argument-hint: "[--dry-run] [recover]"
 ---
 

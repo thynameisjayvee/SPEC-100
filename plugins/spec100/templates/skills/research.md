@@ -1,7 +1,6 @@
 ---
 name: spec100-research
 description: Research a project topic and record cited, actionable findings.
-disable-model-invocation: true
 argument-hint: "<topic> [request]"
 ---
 

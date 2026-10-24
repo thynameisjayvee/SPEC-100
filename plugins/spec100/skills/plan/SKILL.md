@@ -1,7 +1,6 @@
 ---
 name: plan
 description: Create an execution plan from research or a direct request using the SPEC-100 harness.
-disable-model-invocation: true
 argument-hint: "<topic> [request]"
 ---
 

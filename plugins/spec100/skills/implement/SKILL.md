@@ -1,7 +1,6 @@
 ---
 name: implement
 description: Implement a SPEC-100 plan through project-specific subagents and bounded review, verification, approval, and UAT gates.
-disable-model-invocation: true
 argument-hint: "<topic>"
 ---
 

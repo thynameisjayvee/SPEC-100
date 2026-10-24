@@ -1,7 +1,6 @@
 ---
 name: iterate
 description: Refine an existing SPEC-100 plan from feedback while retaining its revision history.
-disable-model-invocation: true
 argument-hint: "<topic> <feedback>"
 ---
 

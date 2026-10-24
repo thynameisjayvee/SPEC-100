@@ -1,7 +1,6 @@
 ---
 name: spec100-implement
 description: Implement a selected plan using project agents, independent review, and evidence gates.
-disable-model-invocation: true
 argument-hint: "<topic>"
 ---
 

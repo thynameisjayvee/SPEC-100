@@ -1,7 +1,6 @@
 ---
 name: check
 description: Inspect SPEC-100 structure, native Claude links, index freshness, and implementation evidence without changing the project.
-disable-model-invocation: true
 ---
 
 Resolve the current project root, then run `node "${CLAUDE_PLUGIN_ROOT}/runtime/spec100.cjs" check --root <root> --json` there. This command is read-only and does not call a model.

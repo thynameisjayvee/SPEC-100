@@ -1,7 +1,6 @@
 ---
 name: research
 description: Research a project topic and save the result under the SPEC-100 harness.
-disable-model-invocation: true
 argument-hint: "<topic> [request]"
 ---
 

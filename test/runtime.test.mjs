@@ -61,13 +61,13 @@ function cleanEvidence(f, uat = { applicable: false, reason: 'A library-only cha
   f.evidence('rollback', { detection: 'Validation regression test fails', steps: 'Revert only this change, preserving user work' });
 }
 
-test('native plugin exposes six explicit skills and valid manifests', () => {
+test('native plugin exposes six skills and valid manifests', () => {
   const plugin = JSON.parse(fs.readFileSync(path.join(repo, 'plugins/spec100/.claude-plugin/plugin.json')));
   const marketplace = JSON.parse(fs.readFileSync(path.join(repo, '.claude-plugin/marketplace.json')));
   assert.equal(plugin.name, 'spec100'); assert.equal(marketplace.plugins[0].source, './plugins/spec100');
   for (const name of ['setup', 'check', 'research', 'plan', 'iterate', 'implement']) {
     const skill = fs.readFileSync(path.join(repo, `plugins/spec100/skills/${name}/SKILL.md`), 'utf8');
-    assert.match(skill, new RegExp(`name: ${name}\\n`)); assert.match(skill, /disable-model-invocation: true/);
+    assert.match(skill, new RegExp(`name: ${name}\\n`));
     if (['research', 'plan', 'iterate', 'implement'].includes(name)) assert.match(skill, new RegExp(`harness/skills/${name}\\.md`));
   }
 });
