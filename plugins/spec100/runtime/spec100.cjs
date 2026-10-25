@@ -3,7 +3,7 @@ const fs                           = require('node:fs');
 const path                             = require('node:path');
 const { createHash, randomUUID }                               = require('node:crypto');
 
-const VERSION = '1.0.0';
+const VERSION = '2.0.0';
 const BEGIN = '<!-- spec100:begin -->';
 const END = '<!-- spec100:end -->';
 const INDEX = 'harness/project-index.md';
@@ -110,10 +110,17 @@ const { spawnSync }                                      = require('node:child_p
 const os                           = require('node:os');
 const { parseArgs }                             = require('node:util');
 const SKILLS = ['research', 'plan', 'iterate', 'implement']         ;
+const TOOLS = ['claude', 'codex', 'antigravity', 'generic']         ;
+                                 
+function tool(value        )       {
+  assert((TOOLS                     ).includes(value), `Unknown tool: ${value}. Use ${TOOLS.join(', ')}.`);
+  return value        ;
+}
 const ROLES = ['implementer', 'code-reviewer', 'security-reviewer', 'verifier', 'risk-classifier']         ;
-const EXCLUDED = new Set(['.git', 'node_modules', 'vendor', '.cache', 'dist', 'build', 'coverage', '.venv', 'venv', '__pycache__', 'target', '.next', '.nuxt', '.spec100-install.json']);
+const EXCLUDED = new Set(['.git', 'node_modules', 'vendor', '.cache', 'dist', 'build', 'coverage', '.venv', 'venv', '__pycache__', 'target', '.next', '.nuxt', '.spec100-install.json', '.spec100-write.lock']);
 const SECRET = /(?:^|\/)(?:\.env(?:\..*)?|credentials(?:\..*)?|.*\.(?:pem|key|p12))$/i;
-                                                                                                                         
+                                                                                                                                                                                         
+function manifestTools(manifest          )         { return manifest.tools ?? ['claude']; }
                                                                                                                                                                                                                                           
 function git(args          , root        , gitdir         )         {
   const result = spawnSync('git', [...(gitdir ? ['--git-dir', gitdir, '--work-tree', root] : ['-C', root]), ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
@@ -121,6 +128,16 @@ function git(args          , root        , gitdir         )         {
   return result.stdout;
 }
 function inventory(root        )           {
+  const owned = new Set        ();
+  const manifestFile = path.join(root, 'harness/.runtime/manifest.json');
+  if (exists(manifestFile) && !fs.lstatSync(manifestFile).isSymbolicLink()) {
+    const manifest = readJSON(manifestFile);
+    for (const name of Array.isArray(manifest.owned) ? manifest.owned : []) if (typeof name === 'string') {
+      owned.add(name);
+      let parent = path.posix.dirname(name);
+      while (parent !== '.') { owned.add(parent); const next = path.posix.dirname(parent); if (next === parent) break; parent = next; }
+    }
+  }
   const probe = spawnSync('git', ['-C', root, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' });
   let temporary                    ;
   if (probe.status !== 0) {
@@ -136,15 +153,15 @@ function inventory(root        )           {
       let parent = path.posix.dirname(name);
       while (parent !== '.') { result.add(parent + '/'); parent = path.posix.dirname(parent); }
     }
-    const forced = (name        ) => name === 'CLAUDE.md' || name === 'harness' || name.startsWith('harness/') || name === '.claude/settings.json' || /^\.claude\/(?:agents\/spec100-[^/]+\.md|skills\/spec100-[^/]+(?:\/SKILL\.md)?)$/.test(name);
-    const container = (name        ) => ['.claude', '.claude/agents', '.claude/skills'].includes(name);
+    const forced = (name        ) => owned.has(name) || ['CLAUDE.md', 'AGENTS.md', 'harness', '.claude/settings.json', '.codex/hooks.json', '.agents/hooks.json'].includes(name) || name.startsWith('harness/') || /^\.(?:claude|codex|agents)\/(?:agents\/spec100-[^/]+\.(?:md|toml)|skills\/spec100-[^/]+(?:\/SKILL\.md)?)$/.test(name);
+    const container = (name        ) => /^\.(?:claude|codex|agents)(?:\/(?:agents|skills))?$/.test(name);
     // Git enumerates files; retain empty folders and installed harness assets even if ignored.
     const walk = (relative = '') => {
       for (const item of fs.readdirSync(path.join(root, relative), { withFileTypes: true })) {
         if (EXCLUDED.has(item.name)) continue;
         const name = relative + item.name;
         if (!item.isDirectory()) { if (forced(name)) result.add(name); continue; }
-        if (!result.has(name + '/')) {
+        if (!result.has(name + '/') && !forced(name)) {
           const ignored = spawnSync('git', [...(temporary ? ['--git-dir', temporary, '--work-tree', root] : ['-C', root]), 'check-ignore', '-q', '--', name + '/'], { encoding: 'utf8' });
           assert(ignored.status === 0 || ignored.status === 1, 'Could not inspect directory ignore rules');
           if (ignored.status === 0 && !forced(name) && !container(name)) continue;
@@ -163,9 +180,13 @@ function inventory(root        )           {
 }
 function installed(root        )           {
   const file = safe(root, 'harness/.runtime/manifest.json');
-  assert(exists(file), 'Project is not initialized. Run /spec100:setup in Claude Code.');
+  assert(exists(file), 'Project is not initialized. Use the spec100-setup skill (Claude: /spec100:setup).');
   const manifest = readJSON(file);
-  assert(manifest.version === VERSION && typeof manifest.software === 'boolean' && Array.isArray(manifest.owned) && Array.isArray(manifest.agents) && manifest.links && typeof manifest.links === 'object', 'Unsupported or malformed harness manifest');
+  assert(['1.0.0', VERSION].includes(manifest.version) && typeof manifest.software === 'boolean' && Array.isArray(manifest.owned) && Array.isArray(manifest.agents) && manifest.links && typeof manifest.links === 'object', 'Unsupported or malformed harness manifest');
+  if (manifest.schema !== undefined) {
+    assert(manifest.schema === 2 && Array.isArray(manifest.tools) && manifest.tools.length > 0 && new Set(manifest.tools).size === manifest.tools.length && manifest.generated && typeof manifest.generated === 'object' && !Array.isArray(manifest.generated), 'Malformed integration manifest');
+    manifest.tools.forEach(tool);
+  }
   return manifest;
 }
 function validateDraft(root        , draft     )                         {
@@ -207,10 +228,13 @@ function indexFile(files          )         {
   }).join('\n');
   return `# Project index\n\n${links}\n`;
 }
-// The index grows with the project, so CLAUDE.md lists only top-level folders and links to the index without importing it.
-function managedSection(files          , agentsImport         )         {
+// Root instructions stay small. The index is read on demand.
+function managedSection(files          , agentsImport         , shared = false)         {
   const folders = files.filter(name => /^[^/]+\/$/.test(name)).sort().map(name => `- \`${name}\``).join('\n');
-  return `${BEGIN}\n# SPEC-100 agent harness\n${agentsImport ? '\n@AGENTS.md\n' : ''}\n@harness/project-context.md\n@harness/learnings.md\n@harness/rules/STE-100.md\n@harness/rules/YAGNI-KISS.md\n@harness/rules/atomic-operations.md\n\nUse /spec100:research, /spec100:plan, /spec100:iterate, /spec100:implement, and /spec100:check.\nCanonical skills: harness/skills/. Topic artifacts: harness/thoughts/.\n\n## Project layout\n\nFind project files in ${INDEX} before you search. Claude Code does not import that file; read it on demand.\n\nTop-level folders:\n${folders}\n${END}`;
+  const context = shared
+    ? 'Before work, read harness/project-context.md, harness/learnings.md, and all three files in harness/rules/. Follow ASD-STE100 Simplified Technical English in applicable technical communication.\nUse the spec100-research, spec100-plan, spec100-iterate, spec100-implement, and spec100-check skills. If this tool does not discover skills, read the matching canonical file in harness/skills/.\nRequired independent agents, verification, risk, approval, and UAT gates still apply. Missing capabilities block implementation. Use one active writer per project.\n'
+    : `${agentsImport ? '\n@AGENTS.md\n' : ''}\n@harness/project-context.md\n@harness/learnings.md\n@harness/rules/STE-100.md\n@harness/rules/YAGNI-KISS.md\n@harness/rules/atomic-operations.md\n\nUse /spec100:research, /spec100:plan, /spec100:iterate, /spec100:implement, and /spec100:check.\n`;
+  return `${BEGIN}\n# SPEC-100 agent harness\n\n${context}\nCanonical skills: harness/skills/. Topic artifacts: harness/thoughts/.\n\n## Project layout\n\nFind project files in ${INDEX} before you search. Read that file on demand; do not import it.\n\nTop-level folders:\n${folders}\n${END}`;
 }
 function withSection(previous        , section        )         {
   const start = previous.indexOf(BEGIN), end = previous.indexOf(END);
@@ -219,107 +243,175 @@ function withSection(previous        , section        )         {
   assert(previous.indexOf(BEGIN, start + BEGIN.length) === -1 && previous.indexOf(END, end + END.length) === -1, 'Duplicate SPEC-100 root sections');
   return previous.slice(0, start) + section + previous.slice(end + END.length);
 }
+function rootFiles(manifest          )           {
+  const tools = manifestTools(manifest);
+  return [...(tools.includes('claude') ? ['CLAUDE.md'] : []), ...(tools.some(name => name !== 'claude') ? ['AGENTS.md'] : [])];
+}
+function rootContent(root        , name        , files          , manifest          )         {
+  const file = safe(root, name);
+  return withSection(exists(file) ? fs.readFileSync(file, 'utf8') : '', managedSection(files, exists(path.join(root, 'AGENTS.md')) || rootFiles(manifest).includes('AGENTS.md'), name === 'AGENTS.md'));
+}
 function refreshIndex(root        )       {
-  installed(root);
-  const files = inventory(root);
-  const index = safe(root, INDEX), nextIndex = indexFile(files);
-  const indexChanged = !exists(index) || fs.readFileSync(index, 'utf8') !== nextIndex;
-  const file = safe(root, 'CLAUDE.md');
-  const current = fs.readFileSync(file, 'utf8');
-  const next = withSection(current, managedSection(files, exists(path.join(root, 'AGENTS.md'))));
-  // The journal restores both files if a write stops between them; index-only updates need one atomic write.
-  if (current !== next) transaction(root, [...(indexChanged ? [{ path: INDEX, content: nextIndex }] : []), { path: 'CLAUDE.md', content: next }]);
-  else if (indexChanged) atomic(index, nextIndex);
+  const manifest = installed(root), files = inventory(root);
+  const entries          = [];
+  for (const name of rootFiles(manifest)) {
+    const next = rootContent(root, name, files, manifest);
+    if (!exists(safe(root, name)) || fs.readFileSync(safe(root, name), 'utf8') !== next) entries.push({ path: name, content: next });
+  }
+  const next = indexFile(files);
+  if (!exists(safe(root, INDEX)) || fs.readFileSync(safe(root, INDEX), 'utf8') !== next) entries.push({ path: INDEX, content: next });
+  if (entries.length) transaction(root, entries);
 }
 function projectContext(draft       )         {
   return '# Project context\n\n' + Object.entries(draft.context).map(([key, value]) => `## ${key[0] .toUpperCase() + key.slice(1)}\n\n${Array.isArray(value) ? value.map(item => '- ' + item).join('\n') || 'No project evidence yet; context is unknown.' : value}\n`).join('\n');
 }
 function agent(role        , prompt        , context        )         {
-  return `---\nname: spec100-${role}\ndescription: ${JSON.stringify(`Project-specific ${role} for ${context.replace(/\n/g, ' ').slice(0, 150)}`)}\ntools: ${role === 'implementer' ? 'Read, Glob, Grep, Bash, Write, Edit' : 'Read, Glob, Grep'}\n---\n\n# ${role}\n\n${prompt}\n\nRead harness/project-context.md, harness/learnings.md, and all harness/rules/ files.\nBefore executing, return five concise operational checkpoints: destination, reason, cost, next action, environment. Do not expose private reasoning. The parent records these in topic evidence.\n${role !== 'implementer' ? 'Remain read-only. Return findings/votes and checkpoints to the parent; do not edit files or delegate.' : 'Work only within the plan and assigned files. Do not create worktrees unless explicitly requested. Ask the parent before any high-risk action.'}\n`;
+  return `---\nname: spec100-${role}\ndescription: ${JSON.stringify(`Project-specific ${role} for ${context.replace(/\n/g, ' ').slice(0, 150)}`)}\n---\n\n# ${role}\n\n${prompt}\n\nRead harness/project-context.md, harness/learnings.md, and all harness/rules/ files.\nBefore executing, return five concise operational checkpoints: destination, reason, cost, next action, environment. Do not expose private reasoning. The parent records these in topic evidence.\n${role !== 'implementer' ? 'Remain read-only. Return findings/votes and checkpoints to the parent; do not edit files or delegate.' : 'Work only within the plan and assigned files. Do not create worktrees unless explicitly requested. Ask the parent before any high-risk action.'}\n`;
 }
 function pluginTemplates()         {
-  const dir = path.resolve(__dirname, '../templates');
-  assert(exists(dir), 'Setup templates unavailable. Run setup through the installed SPEC-100 plugin.');
+  const candidates = [path.resolve(__dirname, 'templates'), path.resolve(__dirname, '../assets/templates'), path.resolve(__dirname, '../templates')];
+  const dir = candidates.find(name => exists(path.join(name, 'protocol.md')));
+  assert(dir, 'Setup templates unavailable. Use the complete spec100-setup skill or Claude plugin.');
   return dir;
 }
-function hookDefinitions()                        {
-  const command = 'node "${CLAUDE_PROJECT_DIR}/harness/.runtime/spec100.cjs" hook --event ';
-  return Object.fromEntries(['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop'].map(event => [event, [{ ...(event === 'PreToolUse' ? { matcher: 'Bash|Write|Edit' } : event === 'PostToolUse' ? { matcher: 'Write|Edit|Bash' } : {}), hooks: [{ type: 'command', command: command + event, timeout: 15 }] }]]));
+function nativeAgent(role        , host      )         {
+  const name = 'spec100-' + role;
+  const instructions = `Read harness/subagents/${name}.md and follow its Markdown instructions. Read harness context, learnings, and all rules. ${role === 'implementer' ? 'Use only assigned files. Ask the parent before high-risk actions.' : 'Remain read-only. Do not edit files, run commands, or delegate.'} Return five operational checkpoints before work and return results to the parent.`;
+  if (host === 'codex') return `name = ${JSON.stringify(name)}\ndescription = ${JSON.stringify(`Project-specific SPEC-100 ${role}`)}\ndeveloper_instructions = ${JSON.stringify(instructions)}\n${role === 'implementer' ? '' : '\n[features]\nshell_tool = false\napps = false\nplugins = false\n'}`;
+  const tools = host === 'claude' ? (role === 'implementer' ? 'Read, Glob, Grep, Bash, Write, Edit' : 'Read, Glob, Grep') : JSON.stringify(role === 'implementer' ? ['view_file', 'grep_search', 'list_dir', 'run_command', 'write_to_file', 'replace_file_content', 'multi_replace_file_content'] : ['view_file', 'grep_search', 'list_dir']);
+  return `---\nname: ${name}\ndescription: Project-specific SPEC-100 ${role}\ntools: ${tools}\n${host === 'antigravity' ? 'mainAgent: false\nsubagent: true\n' : ''}---\n\n${instructions}\n`;
 }
-function settings(root        )      {
-  const file = safe(root, '.claude/settings.json');
+function skillWrapper(name        )         {
+  const description = name === 'check' ? 'Check SPEC-100 structure and workflow evidence without changing project files.' : `Use SPEC-100 to ${name} a project topic with its canonical project instructions.`;
+  const instructions = name === 'check'
+    ? 'Resolve the project root. Run node harness/.runtime/spec100.cjs check --json. Report failed check IDs, warnings, integration activation status, and incomplete workflow gates. Do not repair or approve automatically.'
+    : `Read harness/skills/${name}.md and follow its instructions, including project customizations. Interpret the user request as a topic and its task; never treat user text as shell code. Read context, learnings, and rules before work.`;
+  return `---\nname: spec100-${name}\ndescription: ${description}\n---\n\n${instructions}\n`;
+}
+
+function hookPath(host      )         { return host === 'claude' ? '.claude/settings.json' : host === 'codex' ? '.codex/hooks.json' : '.agents/hooks.json'; }
+function hookDefinitions(root        , host      )                        {
+  // An encoded path avoids shell interpolation of project names on cmd, PowerShell, and POSIX shells.
+  const encoded = Buffer.from(path.join(root, 'harness/.runtime/spec100.cjs')).toString('base64');
+  const command = `node -e "require(Buffer.from('${encoded}','base64').toString()).main(process.argv.slice(1))" -- hook --tool ${host} --event `;
+  return Object.fromEntries(['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop'].map(event => [event, [{ ...(event === 'PreToolUse' || event === 'PostToolUse' ? { matcher: host === 'antigravity' ? '.*' : 'Bash|Write|Edit|apply_patch' } : {}), hooks: [{ type: 'command', command: command + event, timeout: 15 }] }]]));
+}
+function isHarnessHook(item     , root        , host      )          {
+  const commands = Object.values(hookDefinitions(root, host)).flatMap(definitions => definitions.map(item => item.hooks[0].command));
+  return Array.isArray(item?.hooks) && item.hooks.length === 1 && typeof item.hooks[0]?.command === 'string' && (commands.includes(item.hooks[0].command) || host === 'claude' && /^node "\$\{CLAUDE_PROJECT_DIR\}\/harness\/\.runtime\/spec100\.cjs" hook --event (SessionStart|PreToolUse|PostToolUse|Stop)$/.test(item.hooks[0].command));
+}
+function settings(root        , host      )      {
+  const file = safe(root, hookPath(host));
   const result = exists(file) ? readJSON(file) : {};
-  assert(result && typeof result === 'object' && !Array.isArray(result), 'Claude settings must be a JSON object');
+  assert(result && typeof result === 'object' && !Array.isArray(result), `${host} settings must be a JSON object`);
+  if (host === 'antigravity') {
+    if (result.spec100 !== undefined) {
+      assert(result.spec100 && typeof result.spec100 === 'object' && Object.values(result.spec100).filter(Array.isArray).flat().every((item     ) => isHarnessHook(item, root, host)), 'Unmanaged Antigravity spec100 hook collision');
+    }
+    result.spec100 = hookDefinitions(root, host);
+    return result;
+  }
   result.hooks ??= {};
-  assert(typeof result.hooks === 'object' && !Array.isArray(result.hooks), 'Claude hooks must be an object');
-  for (const [event, definitions] of Object.entries(hookDefinitions())) {
+  assert(typeof result.hooks === 'object' && !Array.isArray(result.hooks), `${host} hooks must be an object`);
+  for (const [event, definitions] of Object.entries(hookDefinitions(root, host))) {
     const existing = result.hooks[event] ?? [];
-    assert(Array.isArray(existing), `Claude hooks.${event} must be an array`);
-    result.hooks[event] = [...existing.filter((item     ) => !isHarnessHook(item)), ...definitions];
+    assert(Array.isArray(existing), `${host} hooks.${event} must be an array`);
+    result.hooks[event] = [...existing.filter((item     ) => !isHarnessHook(item, root, host)), ...definitions];
   }
   return result;
 }
-function isHarnessHook(item     )          {
-  return Array.isArray(item?.hooks) && item.hooks.length === 1 && typeof item.hooks[0]?.command === 'string' && /^node "\$\{CLAUDE_PROJECT_DIR\}\/harness\/\.runtime\/spec100\.cjs" hook --event (SessionStart|PreToolUse|PostToolUse|Stop)$/.test(item.hooks[0].command);
-}
-function setup(root        , draft     , dryRun = false)      {
+function setup(root        , draft     , dryRun = false, requested         = [])      {
   assert(!exists(safe(root, JOURNAL)), 'Interrupted installation detected. Run runtime recover first.');
   validateDraft(root, draft);
   const old = exists(safe(root, 'harness/.runtime/manifest.json')) ? installed(root) : undefined;
   if (old) assert(old.software === draft.software, 'Project type changed; preserve the existing harness and migrate explicitly.');
-  const templates = pluginTemplates();
-  const entries          = [];
-  const owned = new Set(old?.owned ?? []);
-  const links                         = { ...old?.links };
-  const put = (relative        , content        , preserve = false) => {
-    const file = safe(root, relative);
+  const tools = [...new Set([...(old ? manifestTools(old) : []), ...(requested.length ? requested : old ? [] : ['claude']          )])].sort()          ;
+  const templates = pluginTemplates(), legacy                         = readJSON(path.join(templates, 'legacy-v1.json'));
+  const entries          = [], generated = { ...old?.generated };
+  const owned = new Set(old?.owned ?? []), links = { ...old?.links };
+  const merged = new Set(['CLAUDE.md', 'AGENTS.md', INDEX, ...tools.filter(name => name !== 'generic').map(hookPath)]);
+  const migrations           = [];
+  const put = (relative        , content        , preserve = false, native = false) => {
+    safe(root, path.posix.dirname(relative) === '.' ? relative + '.validation' : path.posix.dirname(relative));
+    const file = path.join(root, relative);
     if (exists(file)) {
-      assert(old?.owned.includes(relative) || relative === 'CLAUDE.md' || relative === INDEX || relative === '.claude/settings.json', `Unmanaged file collision: ${relative}`);
-      if (preserve) return;
+      if (fs.lstatSync(file).isSymbolicLink()) {
+        assert(old?.links[relative] && path.normalize(fs.readlinkSync(file)) === path.normalize(old.links[relative]), `Unmanaged or modified link collision: ${relative}`);
+      } else {
+        safe(root, relative);
+        const bootstrap = /^\.(?:agents|claude)\/skills\/spec100-setup\//.test(relative) && fs.readFileSync(file, 'utf8') === content;
+        assert(old?.owned.includes(relative) || merged.has(relative) || bootstrap, `Unmanaged file collision: ${relative}`);
+        assert(preserve || !old?.generated?.[relative] || digest(fs.readFileSync(file)) === old.generated[relative], `Modified generated file: ${relative}. Preserve its changes before setup.`);
+        if (preserve) {
+          const previous = fs.readFileSync(file, 'utf8'), key = relative.replace(/^harness\//, '');
+          if (old && !old.schema && legacy[key] && (previous === legacy[key] || previous === legacy[key].replace(/(description:.*\n)/, '$1disable-model-invocation: true\n'))) {
+            if (previous !== content) { entries.push({ path: relative, content }); migrations.push(relative); }
+          } else {
+            if (old && !old.schema && /^harness\/(?:skills|rules)\//.test(relative) && tools.some(name => name !== 'claude') && /(?:\bClaude(?: Code)?\b|CLAUDE_|\/spec100:|native Claude|relative symlinks)/.test(previous)) {
+              throw new Error(`Customized legacy instructions need migration: ${relative}. Update the tool-specific wording without removing custom instructions, then retry. No files were written.`);
+            }
+            return;
+          }
+          owned.add(relative); return;
+        }
+      }
     }
-    entries.push({ path: relative, content }); owned.add(relative);
+    // Native clients can protect installed skill assets. Adopt identical files without rewriting them.
+    if (!exists(file) || fs.lstatSync(file).isSymbolicLink() || fs.readFileSync(file, 'utf8') !== content) entries.push({ path: relative, content });
+    owned.add(relative);
+    if (native) generated[relative] = digest(content);
+    delete links[relative];
   };
   put('harness/project-context.md', projectContext(draft), true);
   put('harness/learnings.md', '# Operational learnings\n\nAppend entries through the harness runtime. Preserve all previous entries.\n', true);
   for (const rule of ['STE-100', 'YAGNI-KISS', 'atomic-operations']) put(`harness/rules/${rule}.md`, fs.readFileSync(path.join(templates, 'rules', rule + '.md'), 'utf8'), true);
   const roles = draft.software ? [...ROLES] : ['implementer'];
   for (const role of roles) put(`harness/subagents/spec100-${role}.md`, agent(role, draft.agents[role] , draft.context.domain), true);
-  const link = (relative        , canonical        ) => {
-    safe(root, path.posix.dirname(relative));
-    const target = path.posix.relative(path.posix.dirname(relative), canonical);
-    const file = path.join(root, relative);
-    if (exists(file)) assert(old?.links[relative] === target && fs.lstatSync(file).isSymbolicLink() && fs.readlinkSync(file) === target, `Unmanaged or modified link collision: ${relative}`);
-    links[relative] = target;
-    entries.push({ path: relative, link: target });
-  };
-  for (const role of roles) link(`.claude/agents/spec100-${role}.md`, `harness/subagents/spec100-${role}.md`);
-  for (const skill of SKILLS) {
-    put(`harness/skills/${skill}.md`, fs.readFileSync(path.join(templates, 'skills', skill + '.md'), 'utf8'), true);
-    link(`.claude/skills/spec100-${skill}/SKILL.md`, `harness/skills/${skill}.md`);
-  }
+  for (const skill of SKILLS) put(`harness/skills/${skill}.md`, fs.readFileSync(path.join(templates, 'skills', skill + '.md'), 'utf8'), true);
   put('harness/.runtime/spec100.cjs', fs.readFileSync(__filename, 'utf8'));
+  const copyTemplates = (dir        , relative = '', destination = 'harness/.runtime/templates/', native = false) => {
+    for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+      const name = relative + item.name;
+      if (item.isDirectory()) copyTemplates(path.join(dir, item.name), name + '/', destination, native);
+      else put(destination + name, fs.readFileSync(path.join(dir, item.name), 'utf8'), false, native);
+    }
+  };
+  copyTemplates(templates);
   put('harness/.runtime/protocol.md', fs.readFileSync(path.join(templates, 'protocol.md'), 'utf8'));
   put('harness/.runtime/learnings-prefix.json', json({ content: exists(safe(root, 'harness/learnings.md')) ? fs.readFileSync(safe(root, 'harness/learnings.md'), 'utf8') : entries.find(e => e.path === 'harness/learnings.md') .content }), true);
-  put('.claude/settings.json', json(settings(root)));
-  const manifest           = { version: VERSION, software: draft.software, agents: roles, owned: [...owned, 'harness/.runtime/manifest.json', 'CLAUDE.md', INDEX].filter((v, i, a) => a.indexOf(v) === i).sort(), links };
+  const shared = tools.some(host => host !== 'claude');
+  for (const host of tools) {
+    if (host === 'generic') continue;
+    for (const role of roles) put(`${host === 'claude' ? '.claude' : host === 'codex' ? '.codex' : '.agents'}/agents/spec100-${role}.${host === 'codex' ? 'toml' : 'md'}`, nativeAgent(role, host), false, true);
+    put(hookPath(host), json(settings(root, host)));
+  }
+  for (const dir of [...(tools.includes('claude') ? ['.claude'] : []), ...(shared ? ['.agents'] : [])]) {
+    for (const skill of ['check', ...SKILLS]) put(`${dir}/skills/spec100-${skill}/SKILL.md`, skillWrapper(skill), false, true);
+    const destination = `${dir}/skills/spec100-setup/`;
+    put(destination + 'SKILL.md', fs.readFileSync(path.join(templates, 'setup.md'), 'utf8'), false, true);
+    put(destination + 'scripts/spec100.cjs', fs.readFileSync(__filename, 'utf8'), false, true);
+    copyTemplates(templates, '', destination + 'assets/templates/', true);
+  }
+  const manifest           = { version: VERSION, schema: 2, tools, software: draft.software, agents: roles, owned: [], links, generated };
+  for (const name of ['harness/.runtime/manifest.json', INDEX, ...rootFiles(manifest)]) owned.add(name);
+  manifest.owned = [...owned].sort();
   put('harness/.runtime/manifest.json', json(manifest));
   const files = new Set(inventory(root));
-  for (const entry of [...entries, { path: 'CLAUDE.md' }, { path: INDEX }, { path: 'harness/thoughts/' }]) {
+  for (const entry of [...entries, ...manifest.owned.map(name => ({ path: name })), { path: 'harness/thoughts/' }]) {
     files.add(entry.path);
     let parent = path.posix.dirname(entry.path.replace(/\/$/, ''));
     while (parent !== '.') { files.add(parent + '/'); parent = path.posix.dirname(parent); }
   }
-  const rootFile = safe(root, 'CLAUDE.md');
   put(INDEX, indexFile([...files].sort()));
-  put('CLAUDE.md', withSection(exists(rootFile) ? fs.readFileSync(rootFile, 'utf8') : '', managedSection([...files].sort(), exists(path.join(root, 'AGENTS.md')))));
-  if (!dryRun) { transaction(root, entries, ['harness/thoughts']); refreshIndex(root); }
-  return { version: VERSION, dryRun, files: entries.map(e => e.path), commands: ['setup', 'check', ...SKILLS].map(name => '/spec100:' + name) };
+  for (const name of rootFiles(manifest)) put(name, rootContent(root, name, [...files].sort(), manifest));
+  if (!dryRun) transaction(root, entries, ['harness/thoughts']);
+  return { version: VERSION, dryRun, tools, migrations, files: entries.map(e => e.path), commands: { claude: tools.includes('claude') ? ['setup', 'check', ...SKILLS].map(name => '/spec100:' + name) : [], portable: shared ? ['setup', 'check', ...SKILLS].map(name => 'spec100-' + name) : [] }, activation: 'unverified: inspect native hooks and agents in the active tool before implementation' };
 }
 
                                                                                                                                                     
                                                                                                                                     
                                                                                  
-                                                                                                                                                                                                                                                                                                                                         
+                                                                                                                                                                                                                                                                                                                                                      
 const HIGH_RISK_PATH = /(?:^|\/)(?:auth(?:entication|orization)?|security|migrations?|production|prod|terraform|infra(?:structure)?)(?:[/.\-_]|$)|(?:^|\/)\.github\/workflows\//i;
 // One CLI invocation sees a single code state; its own writes affect excluded evidence/index files.
 const snapshotCache = new Map                                ();
@@ -332,7 +424,8 @@ function projectSnapshot(root        )                         {
     if (st.isSymbolicLink()) snapshot[name] = digest('link:' + fs.readlinkSync(file));
     else if (st.isFile()) {
       let value                  = fs.readFileSync(file);
-      if (name === 'CLAUDE.md') value = value.toString('utf8').replace(/<!-- spec100:begin -->[\s\S]*?<!-- spec100:end -->\n?/, '');
+      // Layout refreshes are bookkeeping. Policy text and user instructions remain part of the fingerprint.
+      if (name === 'CLAUDE.md' || name === 'AGENTS.md') value = value.toString('utf8').replace(/(<!-- spec100:begin -->[\s\S]*?)\n## Project layout\n[\s\S]*?(<!-- spec100:end -->)/, '$1\n$2');
       snapshot[name] = digest(Buffer.concat([Buffer.from(`file:${st.mode & 0o100}:`), typeof value === 'string' ? Buffer.from(value) : value]));
     }
   }
@@ -340,6 +433,13 @@ function projectSnapshot(root        )                         {
   return snapshot;
 }
 function fingerprint(root        )         { return digest(JSON.stringify(projectSnapshot(root))); }
+function capabilitiesFingerprint(root        )         {
+  return digest(JSON.stringify(Object.entries(projectSnapshot(root)).filter(([name]) => /^(?:AGENTS\.md|CLAUDE\.md|\.(?:claude|codex|agents)\/|harness\/(?:\.runtime|rules|skills|subagents)\/)/.test(name))));
+}
+function capabilitiesCurrent(root        , run     )          {
+  const evidence = run.evidence.capabilities;
+  return !!evidence && evidence.fingerprint === capabilitiesFingerprint(root) && evidence.planHash === planHash(root, run);
+}
 function runPath(root        , topic        )         { return safe(root, `harness/thoughts/${slug(topic)}/run.json`); }
 function loadRun(root        , topic        )      {
   installed(root);
@@ -375,7 +475,11 @@ function runChecks(root        , run     )                                      
   const risk = run.evidence.risk;
   add('workflow.risk', current(root, run, risk), 'Record a risk assessment against the current changes.');
   const approval = run.evidence.approval;
-  add('workflow.approval', riskLevel(root, run) !== 'high' || current(root, run, approval), 'Obtain explicit human approval inside Claude Code for these high-risk changes.');
+  add('workflow.approval', riskLevel(root, run) !== 'high' || current(root, run, approval), 'Obtain explicit human approval in the active conversation for these high-risk changes.');
+  if (run.tool) {
+    const caps = run.evidence.capabilities;
+    add('workflow.capabilities', capabilitiesCurrent(root, run) && caps .data.tool === run.tool && caps .data.hooksActive === true && (!manifest.software || caps .data.independentAgents === true), 'Confirm active trusted hooks and required independent agents in the selected tool; record capabilities evidence. Missing capabilities block implementation.');
+  }
   const points = run.evidence.checkpoints;
   const participantIds = new Set(run.rounds.flatMap(round => round.reviewers.flatMap(reviewer => [reviewer.id, ...reviewer.findings.flatMap(finding => finding.votes.map(vote => vote.verifier))])));
   const loggedIds = new Set(points?.data.agents.map((agent     ) => agent.id) ?? []);
@@ -396,15 +500,18 @@ function runChecks(root        , run     )                                      
   }
   return checks;
 }
-function workflowStart(root        , topic        , plan         , session         )      {
-  installed(root);
+function workflowStart(root        , topic        , plan         , session         , selected       )      {
+  const manifest = installed(root), tools = manifestTools(manifest);
+  assert(selected || tools.length === 1, 'Select the active tool with --tool for this multi-tool harness.');
+  const host = selected ?? tools[0] ;
+  assert(tools.includes(host), `Tool ${host} is not installed. Add it through setup first.`);
   const location = runPath(root, topic);
   assert(!exists(location), 'A run already exists for this topic. Resume it; do not reset the review cap.');
   const candidates = inventory(root).filter(name => name.startsWith(`harness/thoughts/${topic}/plan_`) && name.endsWith('.md'));
   if (!plan) { assert(candidates.length === 1, 'Specify exactly one plan with --plan; no unique plan was found.'); plan = candidates[0] ; }
   assert(plan.startsWith(`harness/thoughts/${topic}/plan_`) && plan.endsWith('.md'), 'Plan must be a plan artifact in this topic');
   text(fs.readFileSync(safe(root, plan), 'utf8'), 'plan');
-  const run      = { version: 1, topic, plan, planHash: digest(fs.readFileSync(safe(root, plan))), baseline: projectSnapshot(root), rounds: [], evidence: {}, started: new Date().toISOString(), status: 'active', ...(session ? { session } : {}) };
+  const run      = { version: 1, tool: host, topic, plan, planHash: digest(fs.readFileSync(safe(root, plan))), baseline: projectSnapshot(root), rounds: [], evidence: {}, started: new Date().toISOString(), status: 'active', ...(session ? { session } : {}) };
   saveRun(root, run);
   return run;
 }
@@ -434,7 +541,14 @@ function record(root        , topic        , kind        , data     )      {
   const run = loadRun(root, topic);
   assert(run.status !== 'blocked', 'Run is blocked; the three-round review cap cannot be reset.');
   assert(data && typeof data === 'object' && !Array.isArray(data), 'Evidence must be a JSON object');
-  if (kind === 'risk') {
+  if (kind === 'capabilities') {
+    assert(tool(data.tool) === (run.tool ?? 'claude'), 'Capability evidence must identify the run tool');
+    assert(['app', 'cli', 'ide', 'other'].includes(data.surface), 'Capability surface must be app, cli, ide, or other');
+    assert(typeof data.independentAgents === 'boolean' && typeof data.hooksActive === 'boolean', 'Capabilities require independentAgents and hooksActive booleans');
+    text(data.reason, 'actual capability verification');
+    assert(!(data.tool === 'antigravity' && data.surface === 'ide' && data.independentAgents), 'Antigravity IDE custom subagents are unverified. Record independentAgents: false and provide a blocked handoff.');
+    assert(!(data.tool === 'generic' && data.hooksActive), 'The generic integration has no native hooks. Use a verified native integration for implementation.');
+  } else if (kind === 'risk') {
     assert(['low', 'medium', 'high'].includes(data.level), 'Risk must be low, medium, or high');
     text(data.reason, 'risk reason');
     assert(data.level === 'high' || !changedFiles(root, run).some(name => HIGH_RISK_PATH.test(name)), 'Deterministic high-risk paths cannot be downgraded');
@@ -469,7 +583,7 @@ function record(root        , topic        , kind        , data     )      {
     const previous = run.evidence.checkpoints;
     if (previous) data = { agents: [...new Map([...previous.data.agents, ...data.agents].map((agent     ) => [agent.id, agent])).values()] };
   } else throw new Error(`Unknown evidence kind: ${kind}`);
-  if (kind !== 'review') run.evidence[kind] = { fingerprint: fingerprint(root), planHash: planHash(root, run), at: new Date().toISOString(), data };
+  if (kind !== 'review') run.evidence[kind] = { fingerprint: kind === 'capabilities' ? capabilitiesFingerprint(root) : fingerprint(root), planHash: planHash(root, run), at: new Date().toISOString(), data };
   run.planHash = planHash(root, run);
   if (run.status !== 'blocked') run.status = 'active';
   saveRun(root, run);
@@ -495,7 +609,8 @@ function workflowStatus(root        , topic        , finalize = false)      {
     saveRun(root, run);
   }
   const reviewFailed = checks.find(check => check.id === 'workflow.review')?.ok === false;
-  const status = !ok && run.rounds.length >= 3 && reviewFailed ? 'blocked' : !ok && run.status === 'complete' ? 'stale' : run.status;
+  const unavailable = run.evidence.capabilities && (run.evidence.capabilities.data.hooksActive !== true || installed(root).software && run.evidence.capabilities.data.independentAgents !== true);
+  const status = !ok && (run.rounds.length >= 3 && reviewFailed || unavailable) ? 'blocked' : !ok && run.status === 'complete' ? 'stale' : run.status;
   return { topic, status, risk: riskLevel(root, run), rounds: run.rounds.length, ok, checks, changedFiles: changedFiles(root, run) };
 }
 function evidenceHash(run     )         { return digest(JSON.stringify({ rounds: run.rounds, evidence: run.evidence, planHash: run.planHash })); }
@@ -534,7 +649,7 @@ function learn(root        , entry        )      {
   return { appended: true };
 }
 
-function compliance(root        )      {
+function compliance(root        , selected         = [])      {
   const checks                                                     = [];
   const add = (id        , test               , remediation        ) => {
     try { const ok = test(); checks.push({ id, ok, remediation: ok ? '' : remediation }); }
@@ -544,7 +659,10 @@ function compliance(root        )      {
   let manifest          ;
   try { manifest = installed(root); }
   catch (e     ) { checks.push({ id: 'installation.manifest', ok: false, remediation: e.message }); return { ok: false, checks }; }
-  for (const relative of manifest.owned) add('file.' + relative, () => {
+  const tools = selected.length ? selected : manifestTools(manifest);
+  for (const host of tools) assert(manifestTools(manifest).includes(host), `Tool ${host} is not installed.`);
+  const relevant = (name        ) => name.startsWith('.claude/') || name === 'CLAUDE.md' ? tools.includes('claude') : name.startsWith('.codex/') ? tools.includes('codex') : name === '.agents/hooks.json' || name.startsWith('.agents/agents/') ? tools.includes('antigravity') : name.startsWith('.agents/') || name === 'AGENTS.md' ? tools.some(host => host !== 'claude') : true;
+  for (const relative of manifest.owned.filter(relevant)) add('file.' + relative, () => {
     const file = safe(root, relative);
     return exists(file) && fs.statSync(file).isFile() && fs.statSync(file).size > 0;
   }, `Restore ${relative}.`);
@@ -553,36 +671,45 @@ function compliance(root        )      {
     return required.every(name => manifest.owned.includes(name) && exists(safe(root, name))) && (manifest.software ? ROLES : ['implementer']).every(role => manifest.agents.includes(role));
   }, 'Restore the mandatory SPEC-100 files and agents.');
   add('structure.thoughts', () => fs.statSync(safe(root, 'harness/thoughts')).isDirectory(), 'Restore the thoughts directory.');
-  for (const [relative, target] of Object.entries(manifest.links)) add('link.' + relative, () => {
+  for (const [relative, target] of Object.entries(manifest.links).filter(([relative]) => relevant(relative))) add('link.' + relative, () => {
     safe(root, path.posix.dirname(relative));
     const file = path.join(root, relative);
-    return exists(file) && fs.lstatSync(file).isSymbolicLink() && fs.readlinkSync(file) === target && exists(path.resolve(path.dirname(file), target));
+    return exists(file) && fs.lstatSync(file).isSymbolicLink() && path.normalize(fs.readlinkSync(file)) === path.normalize(target) && exists(path.resolve(path.dirname(file), target));
   }, `Restore relative symlink ${relative}.`);
-  add('integration.links', () => [...SKILLS.map(skill => `.claude/skills/spec100-${skill}/SKILL.md`), ...manifest.agents.map(role => `.claude/agents/spec100-${role}.md`)].every(name => typeof manifest.links[name] === 'string'), 'Restore the required skill and agent links.');
   const frontmatter = (relative        , name        )         => {
     const body = fs.readFileSync(safe(root, relative), 'utf8');
     const header = body.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1];
-    assert(header && new RegExp(`^name: *${name} *$`, 'm').test(header) && /^description: *\S.*$/m.test(header), `Missing native name/description frontmatter: ${relative}`);
+    assert(header && new RegExp(`^name: *${name} *$`, 'm').test(header) && /^description: *\S.*$/m.test(header), `Missing name/description frontmatter: ${relative}`);
     return header;
   };
-  for (const skill of SKILLS) add('native.skill.' + skill, () => !!frontmatter(`harness/skills/${skill}.md`, 'spec100-' + skill), 'Restore the canonical skill frontmatter for native discovery.');
-  for (const role of manifest.agents) add('native.agent.' + role, () => {
-    const header = frontmatter(`harness/subagents/spec100-${role}.md`, 'spec100-' + role);
-    const tools = header.match(/^tools: *(.*)$/m)?.[1];
-    return !!tools && (role === 'implementer' || tools.split(/[,\s\[\]]+/).filter(Boolean).every(tool => ['Read', 'Glob', 'Grep'].includes(tool)));
-  }, 'Restore native agent frontmatter and keep reviewers/verifiers/risk classifiers read-only.');
-  add('integration.hooks', () => {
-    const config = readJSON(safe(root, '.claude/settings.json'));
-    return config.disableAllHooks !== true && Object.entries(hookDefinitions()).every(([event, definitions]) => Array.isArray(config.hooks?.[event]) && config.hooks[event].some((item     ) => isHarnessHook(item) && item.matcher === definitions[0].matcher && item.hooks[0].type === 'command' && item.hooks[0].command === definitions[0].hooks[0].command && item.hooks[0].async !== true));
-  }, 'Restore the harness hooks with /spec100:setup.');
+  for (const skill of SKILLS) add('native.skill.' + skill, () => !!frontmatter(`harness/skills/${skill}.md`, 'spec100-' + skill), 'Restore the canonical skill name and description.');
+  for (const role of manifest.agents) add('native.agent.' + role, () => !!frontmatter(`harness/subagents/spec100-${role}.md`, 'spec100-' + role), 'Restore the canonical agent instructions.');
+  for (const [relative, hash] of Object.entries(manifest.generated ?? {}).filter(([relative]) => relevant(relative))) add('integration.file.' + relative, () => digest(fs.readFileSync(safe(root, relative))) === hash, `Restore the generated wrapper ${relative}; customize its canonical harness file instead.`);
+  const integrations        = [];
+  for (const host of tools) {
+    if (host === 'generic') {
+      integrations.push({ tool: host, configured: true, activation: 'unsupported', limitations: ['No native hook adapter. Research, planning, and checks are available; implementation gates remain required.'] });
+      continue;
+    }
+    let configured = false;
+    add('integration.' + host + '.hooks', () => {
+      const config = readJSON(safe(root, hookPath(host)));
+      const groups = host === 'antigravity' ? config.spec100 : config.hooks;
+      configured = config.disableAllHooks !== true && groups?.enabled !== false && Object.entries(hookDefinitions(root, host)).every(([event, definitions]) => Array.isArray(groups?.[event]) && groups[event].some((item     ) => isHarnessHook(item, root, host) && item.matcher === definitions[0].matcher && item.hooks[0].type === 'command' && item.hooks[0].command === definitions[0].hooks[0].command && item.hooks[0].async !== true && item.hooks[0].enabled !== false));
+      return configured;
+    }, `Restore ${host} hooks with the setup skill, then inspect and trust them in the tool.`);
+    // This read-only command cannot determine a client's trust state or available tools.
+    integrations.push({ tool: host, configured, activation: 'unverified', limitations: host === 'codex' ? ['Hooks need native trust. Read-only agent instructions do not create a separate sandbox.'] : host === 'antigravity' ? ['IDE custom subagents are unverified; required agent work is blocked there.'] : [] });
+  }
   add('index.current', () => {
-    const content = fs.readFileSync(safe(root, 'CLAUDE.md'), 'utf8');
-    const index = safe(root, INDEX), files = inventory(root);
-    return content.includes(BEGIN) && withSection(content, managedSection(files, exists(path.join(root, 'AGENTS.md')))) === content && exists(index) && fs.readFileSync(index, 'utf8') === indexFile(files);
-  }, 'Refresh the root index through the harness runtime index command.');
+    const files = inventory(root);
+    return rootFiles(manifest).filter(relevant).every(name => {
+      const current = fs.readFileSync(safe(root, name), 'utf8');
+      return current.includes(BEGIN) && rootContent(root, name, files, manifest) === current;
+    }) && fs.readFileSync(safe(root, INDEX), 'utf8') === indexFile(files);
+  }, 'Refresh the project index through the runtime index command.');
   add('learnings.append-only', () => fs.readFileSync(safe(root, 'harness/learnings.md'), 'utf8').startsWith(readJSON(safe(root, 'harness/.runtime/learnings-prefix.json')).content), 'Restore the previously recorded learning prefix.');
-  const workflows        = [];
-  const runs = allRuns(root);
+  const workflows        = [], runs = allRuns(root);
   for (const run of runs) {
     const topic = run.topic;
     try {
@@ -590,88 +717,143 @@ function compliance(root        )      {
         const valid = run.completion .evidenceHash === evidenceHash(run) && run.completion .planHash === planHash(root, run);
         workflows.push({ topic, status: 'complete', historical: true, ok: valid, rounds: run.rounds.length });
         add('workflow.' + topic, () => valid, `Historical implementation ${topic} has modified completion evidence or plan.`);
-        continue;
+      } else {
+        const result = workflowStatus(root, topic); workflows.push(result);
+        add('workflow.' + topic, () => result.ok, `Implementation ${topic} has incomplete or stale workflow gates.`);
       }
-      const result = workflowStatus(root, topic); workflows.push(result);
-      // Explicitly in-progress work is reported but is not represented as a completed delivery.
-      add('workflow.' + topic, () => result.ok, `Implementation ${topic} has incomplete or stale workflow gates.`);
     } catch (e     ) { checks.push({ id: 'workflow.' + topic, ok: false, remediation: e.message }); }
   }
-  // Warnings do not fail compliance. CLAUDE.md imports learnings.md, so a large file adds to the memory load.
   const warnings                                    = [];
   const learnings = fs.readFileSync(safe(root, 'harness/learnings.md'), 'utf8').length;
-  if (learnings > LEARNINGS_WARN_CHARS) warnings.push({ id: 'size.learnings', message: `harness/learnings.md has ${learnings} characters (limit ${LEARNINGS_WARN_CHARS}). Plan an archive before Claude Code reports a large memory file.` });
-  return { ok: checks.every(check => check.ok), checks, workflows, warnings };
+  if (learnings > LEARNINGS_WARN_CHARS) warnings.push({ id: 'size.learnings', message: `harness/learnings.md has ${learnings} characters (limit ${LEARNINGS_WARN_CHARS}). Plan an archive before it exhausts instruction context.` });
+  return { ok: checks.every(check => check.ok), scope: 'local structure and recorded evidence; native activation is not authenticated', checks, workflows, integrations, warnings };
 }
-function activeRuns(root        , session         )        {
+function activeRuns(root        , session         , host       = 'claude')        {
   const found = allRuns(root);
-  return found.filter(run => !historical(run, found) && (!run.session || run.session === session) && (run.status === 'active' || run.status === 'complete' && !runChecks(root, run).every(check => check.ok)));
+  return found.filter(run => !historical(run, found) && (run.tool ?? 'claude') === host && (!run.session || run.session === session) && (run.status === 'active' || run.status === 'complete' && !runChecks(root, run).every(check => check.ok)));
 }
-function hook(root        , event        , input     )      {
+function hook(root        , event        , input     , host       = 'claude')      {
+  assert(host !== 'generic', 'Generic integration has no native hook contract');
   if (!exists(path.join(root, 'harness/.runtime/manifest.json'))) return {};
-  const runs = activeRuns(root, input.session_id);
+  const session = host === 'antigravity' ? input.conversationId : input.session_id;
+  const runs = activeRuns(root, session, host);
   if (event === 'SessionStart') {
-    const result = compliance(root);
+    const result = compliance(root, [host]);
     const structural = result.checks.filter((check     ) => !check.id.startsWith('workflow.'));
-    return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: `SPEC-100 is installed. Use /spec100:check for compliance. ${[...structural.filter((c     ) => !c.ok).map((c     ) => c.id + ': ' + c.remediation), ...result.warnings.map((w     ) => w.id + ': ' + w.message)].join('\n')}` } };
+    const context = `SPEC-100 is installed. Inspect native hooks and agents before implementation. Use the spec100-check skill. ${[...structural.filter((c     ) => !c.ok).map((c     ) => c.id + ': ' + c.remediation), ...result.warnings.map((w     ) => w.id + ': ' + w.message)].join('\n')}`;
+    return host === 'antigravity' ? { injectSteps: [{ ephemeralMessage: context }] } : { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: context } };
   }
   if (event === 'PostToolUse') { refreshIndex(root); return {}; }
   if (event === 'PreToolUse') {
-    const command = input.tool_input?.command ?? '';
-    const file = input.tool_input?.file_path;
-    const deny = (reason        ) => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } });
-    if (typeof file === 'string') {
-      const relative = path.relative(root, path.resolve(root, file)).split(path.sep).join('/');
-      if (relative === 'harness/learnings.md' || relative.startsWith('harness/.runtime/')) return deny('Use the SPEC-100 runtime; direct changes to learning history and runtime records are prohibited.');
+    const args = host === 'antigravity' ? input.toolCall?.args : input.tool_input;
+    const command = args?.command ?? args?.CommandLine ?? '';
+    const files = [args?.file_path, args?.TargetFile, args?.AbsolutePath].filter((name)                 => typeof name === 'string');
+    // Codex sends apply_patch text in command, including every affected file and move destination.
+    if (host === 'codex' && input.tool_name === 'apply_patch' && typeof command === 'string') for (const match of command.matchAll(/^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/gm)) files.push(match[1] .trim());
+    const decision = (value                , reason        ) => host === 'antigravity' ? { decision: value === 'ask' ? 'force_ask' : value, reason } : { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: host === 'codex' && value === 'ask' ? 'deny' : value, permissionDecisionReason: reason } };
+    if (!args || typeof args !== 'object' || typeof command !== 'string') return decision('deny', 'Unsupported native tool payload. Update the integration before continuing.');
+    // Antigravity observes read and collaboration tools too. Only file writers and shell commands enter mutation gates.
+    if (host === 'antigravity') {
+      if (typeof input.toolCall?.name !== 'string') return decision('deny', 'Unsupported Antigravity tool name. Update the integration before continuing.');
+      if (!['write_to_file', 'replace_file_content', 'multi_replace_file_content', 'run_command'].includes(input.toolCall.name)) return { decision: 'allow' };
     }
-    if (/\bworkflow\s+approve\b/.test(command)) return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: 'SPEC-100 requires explicit human approval for this plan and change fingerprint.' } };
-    // Cooperative gate: deterministic paths and obvious destructive commands. This is not a shell sandbox.
-    const dangerous = /(?:\brm\s+[^\n]*-[a-z]*[rf]|\bgit\s+(?:reset\s+--hard|clean\s+-|push\s+[^\n]*--force)|\b(?:terraform\s+(?:apply|destroy)|kubectl\s+(?:apply|delete))\b|\bDROP\s+(?:TABLE|DATABASE)\b)/i.test(command) || typeof file === 'string' && HIGH_RISK_PATH.test(path.relative(root, path.resolve(root, file)).split(path.sep).join('/'));
-    if (dangerous && (!runs.length || runs.some(run => !current(root, run, run.evidence.approval)))) return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: 'This action is high risk under SPEC-100. Obtain explicit approval before proceeding.' } };
-    return {};
+    for (const file of files) {
+      const relative = path.relative(root, path.resolve(root, file)).split(path.sep).join('/');
+      if (relative === 'harness/learnings.md' || relative.startsWith('harness/.runtime/')) return decision('deny', 'Use the SPEC-100 runtime; direct changes to learning history and runtime records are prohibited.');
+    }
+    const dangerous = /(?:\brm\s+[^\n]*-[a-z]*[rf]|\bRemove-Item\s+[^\n]*-(?:Recurse|Force)|\bgit\s+(?:reset\s+--hard|clean\s+-|push\s+[^\n]*--force)|\b(?:terraform\s+(?:apply|destroy)|kubectl\s+(?:apply|delete))\b|\bDROP\s+(?:TABLE|DATABASE)\b)/i.test(command) || files.some(file => HIGH_RISK_PATH.test(path.relative(root, path.resolve(root, file)).split(path.sep).join('/')));
+    if (dangerous && (!runs.length || runs.some(run => !current(root, run, run.evidence.approval)))) return decision('ask', 'This action is high risk under SPEC-100. Obtain explicit approval in chat and record it before proceeding.');
+    // Exempt only a standalone call to the installed runtime. Mentioning an approval in a compound command grants nothing.
+    const runtimeAction = !/[;&|\r\n`$<>]/.test(command) ? command.match(/^node(?:\.exe)?\s+(?:"(?:[^"\r\n]*[\\/])?harness[\\/]\.runtime[\\/]spec100\.cjs"|'(?:[^'\r\n]*[\\/])?harness[\\/]\.runtime[\\/]spec100\.cjs'|harness[\\/]\.runtime[\\/]spec100\.cjs)\s+(workflow\s+(?:approve|record|status|check)|artifact|check|index|learn)\b/)?.[1] : undefined;
+    if (runtimeAction === 'workflow approve') {
+      // Codex cannot request permission from a PreToolUse hook. The approval record is cooperative evidence of a real chat response.
+      return host === 'codex' ? { hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: 'Record only the actual explicit human response from this conversation. Do not approve on the user\'s behalf.' } } : decision('ask', 'SPEC-100 requires explicit human approval for this plan and change fingerprint.');
+    }
+    const runtimeEvidence = !!runtimeAction;
+    if (!runtimeEvidence && runs.some(run => run.tool && !capabilitiesCurrent(root, run))) return decision('deny', 'Required tool capabilities are missing or stale. Verify active hooks and independent agents, then record capabilities evidence.');
+    if (!runtimeEvidence && runs.some(run => run.evidence.capabilities && (run.evidence.capabilities.data.hooksActive !== true || installed(root).software && run.evidence.capabilities.data.independentAgents !== true))) return decision('deny', 'A required tool capability is unavailable. Provide a blocked handoff.');
+    return host === 'antigravity' ? { decision: 'allow' } : {};
   }
   if (event === 'Stop') {
-    if (input.stop_hook_active || runs.length === 0) return {};
+    if (input.stop_hook_active || host === 'antigravity' && (input.executionNum !== 0 || input.fullyIdle !== true) || runs.length === 0) return {};
     const pending = runs.filter(run => run.rounds.length < 3 && !runChecks(root, run).every(check => check.ok));
-    if (pending.length) return { decision: 'block', reason: `SPEC-100 implementation gates remain incomplete for ${pending.map(run => run.topic).join(', ')}. Continue verification or explain a blocked handoff. This hook will not repeatedly block the same stop.` };
+    if (pending.length) {
+      const reason = `SPEC-100 gates remain incomplete for ${pending.map(run => run.topic).join(', ')}. Continue verification or explain a blocked handoff. Do not repeat a blocked action.`;
+      return host === 'antigravity' ? { decision: 'continue', reason } : { decision: 'block', reason };
+    }
     return {};
   }
   throw new Error(`Unsupported hook event: ${event}`);
 }
-function main()       {
+function resolveRoot(explicit         )         {
+  if (explicit) return fs.realpathSync(explicit);
+  let cursor = fs.realpathSync(process.cwd());
+  while (true) {
+    if (exists(path.join(cursor, 'harness/.runtime/manifest.json'))) return cursor;
+    const parent = path.dirname(cursor);
+    if (parent === cursor) return fs.realpathSync(process.cwd());
+    cursor = parent;
+  }
+}
+function writer(root        , recovering         )             {
+  const file = safe(root, '.spec100-write.lock');
+  if (exists(file) && recovering) {
+    const previous = readJSON(file);
+    assert(previous.host === os.hostname() && Number.isInteger(previous.pid) && previous.pid > 0, 'Writer lock belongs to an unknown host or process. Inspect it before recovery.');
+    let alive = true;
+    try { process.kill(previous.pid, 0); } catch (error     ) { if (error.code === 'ESRCH') alive = false; else throw error; }
+    assert(!alive, `Writer ${previous.pid} is still active. Wait before recovery.`);
+    fs.unlinkSync(file);
+  }
+  try { fs.writeFileSync(file, json({ pid: process.pid, host: os.hostname() }), { flag: 'wx', mode: 0o600 }); }
+  catch (error     ) { if (error.code === 'EEXIST') throw new Error('Another writer or interrupted write holds .spec100-write.lock. Wait for the writer; use recover for an interrupted installation.'); throw error; }
+  return () => fs.unlinkSync(file);
+}
+
+function main(argv           = process.argv.slice(2))       {
   const [major, minor] = process.versions.node.split('.').map(Number);
   assert(major  > 22 || major === 22 && minor  >= 13, 'SPEC-100 requires Node.js >=22.13');
-  const { values, positionals } = parseArgs({ allowPositionals: true, options: {
-    root: { type: 'string' }, draft: { type: 'string' }, file: { type: 'string' }, topic: { type: 'string' }, name: { type: 'string' }, kind: { type: 'string' }, plan: { type: 'string' }, session: { type: 'string' }, event: { type: 'string' }, json: { type: 'boolean' }, 'dry-run': { type: 'boolean' }
+  const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
+    tool: { type: 'string', multiple: true }, root: { type: 'string' }, draft: { type: 'string' }, file: { type: 'string' }, topic: { type: 'string' }, name: { type: 'string' }, kind: { type: 'string' }, plan: { type: 'string' }, session: { type: 'string' }, event: { type: 'string' }, json: { type: 'boolean' }, 'dry-run': { type: 'boolean' }
   } });
-  const root = fs.realpathSync(values.root ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd());
+  const selected = (values.tool ?? []).map(tool);
+  const root = resolveRoot(values.root ?? (positionals[0] === 'hook' ? path.resolve(__dirname, '../..') : undefined));
   assert(fs.statSync(root).isDirectory(), 'Project root must be a directory');
   const command = positionals[0];
+  assert(!values['dry-run'] || command === 'setup', '--dry-run is only supported for setup. No other command was executed.');
   const required = (value                    , flag        ) => text(value, flag);
+  const mutating = !values['dry-run'] && (['setup', 'recover', 'index', 'artifact', 'learn'].includes(command ?? '') || command === 'workflow' && !['status', 'check'].includes(positionals[1] ?? '') || command === 'hook' && values.event === 'PostToolUse');
+  const release = mutating ? writer(root, command === 'recover') : undefined;
+  try {
   let result     ;
   if (command === 'prepare') result = prepare(root);
-  else if (command === 'setup') result = setup(root, readJSON(path.resolve(required(values.draft, '--draft'))), values['dry-run']);
+  else if (command === 'setup') result = setup(root, readJSON(path.resolve(required(values.draft, '--draft'))), values['dry-run'], selected);
   else if (command === 'recover') { recover(root); result = { recovered: true }; }
   else if (command === 'index') { refreshIndex(root); result = { refreshed: true }; }
-  else if (command === 'check') { result = compliance(root); process.exitCode = result.ok ? 0 : 1; }
+  else if (command === 'check') { result = compliance(root, selected); process.exitCode = result.ok ? 0 : 1; }
   else if (command === 'artifact') result = artifact(root, required(values.kind, '--kind'), required(values.topic, '--topic'), required(values.name, '--name'), fs.readFileSync(path.resolve(required(values.file, '--file')), 'utf8'));
   else if (command === 'learn') result = learn(root, fs.readFileSync(path.resolve(required(values.file, '--file')), 'utf8'));
   else if (command === 'workflow') {
     const topic = slug(required(values.topic, '--topic'));
     const action = positionals[1];
-    if (action === 'start') result = workflowStart(root, topic, values.plan, values.session);
+    assert(selected.length <= 1, 'A workflow uses one active tool.');
+    if (action === 'start') result = workflowStart(root, topic, values.plan, values.session, selected[0]);
     else if (action === 'record') result = record(root, topic, required(values.kind, '--kind'), readJSON(path.resolve(required(values.file, '--file'))));
     else if (action === 'approve') result = approve(root, topic, readJSON(path.resolve(required(values.file, '--file'))));
     else if (action === 'status' || action === 'check' || action === 'finish') { result = workflowStatus(root, topic, action === 'finish'); if (action === 'check') process.exitCode = result.ok ? 0 : 1; }
     else throw new Error('Workflow action must be start, record, approve, status, check, or finish');
   } else if (command === 'hook') {
-    result = hook(root, required(values.event, '--event'), JSON.parse(fs.readFileSync(0, 'utf8')));
+    assert(selected.length <= 1, 'A hook uses one tool.');
+    result = hook(root, required(values.event, '--event'), JSON.parse(fs.readFileSync(0, 'utf8')), selected[0] ?? 'claude');
   } else throw new Error('Command must be prepare, setup, recover, index, check, artifact, learn, workflow, or hook');
   if (values.json || command === 'hook' || command === 'prepare') process.stdout.write(json(result));
   else if (command === 'check') process.stdout.write([...result.checks.map((c     ) => `${c.ok ? 'PASS' : 'FAIL'} ${c.id}${c.ok ? '' : ': ' + c.remediation}`), ...(result.warnings ?? []).map((w     ) => `WARN ${w.id}: ${w.message}`)].join('\n') + '\n');
   else process.stdout.write(json(result));
+  } finally { release?.(); }
 }
-if (require.main === module) {
-  try { main(); }
+function invoke(argv           )       {
+  try { main(argv); }
   catch (error     ) { process.stderr.write(json({ error: error.message })); process.exitCode = 2; }
 }
+module.exports = { main: invoke };
+if (require.main === module) invoke();

@@ -1,10 +1,10 @@
-name: Plugin checks
+name: Harness checks
 on: [push, pull_request]
 jobs:
   check:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         node: ['22.13.0', '24']
     runs-on: ${{ matrix.os }}
     steps:
@@ -15,4 +15,4 @@ jobs:
       - run: npm install --ignore-scripts --no-audit --no-fund
       - run: npm run check
       - name: Ensure committed runtime matches source
-        run: git diff --exit-code -- plugins/spec100/runtime/spec100.cjs
+        run: git diff --exit-code -- plugins/spec100 skills/spec100-setup

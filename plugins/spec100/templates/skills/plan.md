@@ -1,7 +1,6 @@
 ---
 name: spec100-plan
 description: Create an actionable plan from topic research or a direct user request.
-argument-hint: "<topic> [request]"
 ---
 
 Read harness context, learnings, and rules. Resolve the topic, then inspect its research artifacts and relevant project sources. A direct prompt is sufficient when no research artifact exists. Resolve high-impact ambiguity before finalizing; do not ask questions that repository inspection can answer.

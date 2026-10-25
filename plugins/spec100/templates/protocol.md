@@ -1,6 +1,6 @@
 # SPEC-100 runtime protocol
 
-These commands support Claude skills. Run from the project root with Node.js >=22.13 and Git available. Quote concrete paths. Write input drafts outside the project so temporary inputs do not change its fingerprint.
+These commands support SPEC-100 skills in coding tools. Run from the project root with Node.js >=22.13 and Git available. Quote concrete paths. Write input drafts outside the project so temporary inputs do not change its fingerprint.
 
 ## Artifacts and learnings
 
@@ -13,7 +13,7 @@ These commands support Claude skills. Run from the project root with Node.js >=2
 ## Workflow
 
 ```text
-node harness/.runtime/spec100.cjs workflow start --topic <topic> [--plan <relative-path>] [--session <session-id>]
+node harness/.runtime/spec100.cjs workflow start --topic <topic> [--plan <relative-path>] [--session <session-id>] --tool <tool>
 node harness/.runtime/spec100.cjs workflow record --topic <topic> --kind <kind> --file <json>
 node harness/.runtime/spec100.cjs workflow approve --topic <topic> --file <json>
 node harness/.runtime/spec100.cjs workflow status --topic <topic>
@@ -21,7 +21,7 @@ node harness/.runtime/spec100.cjs workflow check --topic <topic>
 node harness/.runtime/spec100.cjs workflow finish --topic <topic>
 ```
 
-The runtime attaches a timestamp, project fingerprint, and selected-plan hash to evidence. These are cooperative gates, not signed external attestations. Faithfully record actual agent and test results. Never invoke approval without the human's explicit response. Native hooks request permission for approval commands and recognizable high-risk actions, but do not parse every shell program or control tools outside Claude Code. Completed runs retain an evidence hash; after a later run starts, earlier completed runs are historical and checked for modified evidence/plans instead of comparing them with later code changes.
+The runtime attaches a timestamp, project fingerprint, and selected-plan hash to evidence. These are cooperative gates, not signed external attestations. Faithfully record actual agent and test results. Never invoke approval without the human's explicit response. Native adapters handle supported high-risk tool calls. Claude and Antigravity can request native permission. Codex cannot emit a hook `ask` result; it denies risky actions without current recorded approval. Its agent must obtain explicit consent in chat before recording approval. Hooks do not parse every shell program or control actions outside the selected tool. Completed runs retain an evidence hash; after a later run starts, earlier completed runs are historical and checked for modified evidence/plans instead of comparing them with later code changes.
 
 `start` captures the baseline and never replaces an existing run. `status` and `check` are read-only; `check` exits 1 for incomplete gates. `finish` records completion only when applicable gates pass. Never reset the review cap.
 
@@ -79,8 +79,26 @@ Approval input (separate `workflow approve` action):
 {"userResponse":"The user's actual explicit approval","reason":"Concrete high-risk action and plan being approved"}
 ```
 
-Hooks request native human permission. Relevant project or plan changes invalidate evidence. Topic artifacts, screenshots, project index entries, and learnings are excluded from the code fingerprint to avoid self-invalidation; the selected plan is hashed separately.
+Recorded approval must quote the actual human response. Native permissions remain tool-specific. Relevant project or plan changes invalidate evidence. Topic artifacts, screenshots, project index entries, and learnings are excluded from the code fingerprint to avoid self-invalidation; the selected plan is hashed separately.
 
 ## CI
 
 `node harness/.runtime/spec100.cjs check --json` validates structure and all recorded runs without model calls or credentials. Exit 0: compliant; 1: noncompliant/incomplete; 2: execution/configuration error. Stable check IDs and remediation explain failures.
+
+## Setup and tool selection
+
+Use the portable spec100-setup skill for active-session analysis. The runtime does not call a model. `setup --draft <json> --tool claude --tool codex --tool antigravity` adds the selected integrations; repeat `--tool` as needed. Without this flag, setup retains existing integrations or defaults a new project to Claude. `--dry-run` previews all writes. `recover` restores an interrupted installation. All installed runtime resources are self-contained.
+
+`check --tool codex --json` checks the core, all workflow evidence, and the selected integration. Without `--tool`, check validates all installed integrations. Configured hooks are reported separately from native activation, which this read-only command cannot authenticate. Exit 0 confirms local structure and recorded evidence, not native trust or independently authenticated attestations.
+
+## Required capability evidence
+
+After `workflow start`, verify the active tool's hook manager and available agent tools, then record `workflow record --kind capabilities --topic <topic> --file <json>`:
+
+```json
+{"tool":"codex","surface":"cli","independentAgents":true,"hooksActive":true,"reason":"Describe the actual native hook inspection and available independent-agent tools."}
+```
+
+The example is a schema, not completed evidence. Record false when a capability is unavailable. Software work requires independent agents and active hooks. Non-software implementation still requires active hooks. Antigravity IDE custom subagents are unverified, so independentAgents must be false there. Generic mode has no hook adapter, so hooksActive must be false. Such runs remain blocked; research, planning, and structural checks remain available. Recheck capabilities after changes to integrations, canonical instructions, or the selected plan. Ordinary code edits do not invalidate capability evidence.
+
+The current tool owns each new run. In a project with multiple integrations, pass one explicit `--tool` to start. Tool/session ownership is never transferred automatically. Use one active writer per project. Do not run simultaneous implementation sessions in different coding tools.

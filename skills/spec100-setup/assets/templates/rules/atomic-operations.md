@@ -1,0 +1,3 @@
+# Atomic operations
+
+Each execution unit must have a clear completion state, own its changes, and leave a consistent project state. Validate inputs before writing. Use atomic replacement for individual generated files and a recovery journal for multi-file installation. Check results before advancing. Preserve previous learning entries and plan revisions. Never allow concurrent agents to write overlapping files. On failure, stop dependent actions, preserve evidence, and recover only changes owned by the operation. Do not equate a multi-file filesystem transaction with a database transaction: an interrupted install must be recovered before use.

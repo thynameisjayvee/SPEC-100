@@ -1,7 +1,6 @@
 ---
 name: spec100-research
 description: Research a project topic and record cited, actionable findings.
-argument-hint: "<topic> [request]"
 ---
 
 Read harness context, learnings, and rules. Interpret the first argument as a lowercase hyphenated topic; if omitted or ambiguous, obtain it from the user. Use the topic as the default artifact name.
