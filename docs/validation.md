@@ -16,7 +16,9 @@ The Windows skips cover POSIX directory permissions and the executable bit. Cros
 
 Coverage includes all four integration selections, additive setup, project-local bootstrap, ignored/adopted assets, unchanged bootstrap timestamps, canonical customizations, unrelated settings, selected integration checks, dry-run, collisions, legacy templates and links, recovery, writer exclusion, capability limits, actual native hook payload formats, protected file reads versus writes, compound approval-command denial, review limits, stale evidence, historical runs, UAT attachments, and root/index refreshes.
 
-CI is configured for Windows, Linux, and macOS with Node 22.13.0 and 24. The local results above do not substitute for a completed remote matrix run.
+CI is configured for Windows, Linux, and macOS with Node 22.13.0 and 24. The local results above do not substitute for a completed remote matrix run. Current remote results are available in [Harness checks](https://github.com/thynameisjayvee/SPEC-100/actions/workflows/ci.yml).
+
+A fresh Windows CI checkout exposed a CRLF-dependent setup-skill rename. The generator now normalizes its source inputs, repository text uses LF, and a regression test builds from an explicit CRLF fixture. All three focused package/generation tests passed after this correction. The shared runtime source and generated runtime hashes below are unchanged.
 
 ## Independent review
 

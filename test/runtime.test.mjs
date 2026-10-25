@@ -71,7 +71,7 @@ test('native plugin exposes six skills and valid manifests', () => {
   assert.equal(plugin.name, 'spec100'); assert.equal(marketplace.plugins[0].source, './plugins/spec100');
   for (const name of ['setup', 'check', 'research', 'plan', 'iterate', 'implement']) {
     const skill = fs.readFileSync(path.join(repo, `plugins/spec100/skills/${name}/SKILL.md`), 'utf8');
-    assert.match(skill, new RegExp(`name: ${name}\\n`));
+    assert.match(skill, new RegExp(`^name: ${name}\\r?$`, 'm'));
     if (['research', 'plan', 'iterate', 'implement'].includes(name)) assert.match(skill, new RegExp(`harness/skills/${name}\\.md`));
   }
 });
@@ -433,6 +433,20 @@ test('portable setup package is self-contained and matches the Claude runtime', 
     }
   };
   compare();
+});
+
+test('a CRLF source checkout generates the correct Claude skill and identical runtime', t => {
+  const f = fixture(t, false), checkout = path.join(f.base, 'crlf checkout');
+  fs.mkdirSync(path.join(checkout, 'plugins/spec100/skills/setup'), { recursive: true });
+  for (const name of ['src/runtime.cts', 'scripts/build.mjs', 'skills/spec100-setup/SKILL.md']) {
+    const file = path.join(checkout, name); fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, fs.readFileSync(path.join(repo, name), 'utf8').replace(/\r?\n/g, '\r\n'));
+  }
+  fs.cpSync(path.join(repo, 'skills/spec100-setup/assets'), path.join(checkout, 'skills/spec100-setup/assets'), { recursive: true });
+  const result = spawnSync(process.execPath, ['scripts/build.mjs'], { cwd: checkout, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(fs.readFileSync(path.join(checkout, 'plugins/spec100/skills/setup/SKILL.md'), 'utf8'), /^name: setup$/m);
+  assert.deepEqual(fs.readFileSync(path.join(checkout, 'plugins/spec100/runtime/spec100.cjs')), fs.readFileSync(runtime));
 });
 
 test('a project-local portable setup skill can bootstrap its own installation', t => {
