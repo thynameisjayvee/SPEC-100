@@ -115,6 +115,29 @@ Limits:
 - The hook starts `claude` from `PATH`. Set `SPEC100_CLAUDE_BIN` to an executable or a JavaScript entry point when `claude` is not on `PATH`. On Windows, a `claude.cmd` file cannot start without a shell, so use `claude.exe` or `SPEC100_CLAUDE_BIN`.
 - Codex and Antigravity have no router.
 
+## Release notes skills
+
+Two skills write release notes from the Git history of a project. The Claude plugin includes both. They are separate from the harness and need no setup.
+
+| Skill | Audience | Source | HTML filters |
+|---|---|---|---|
+| [`release-notes-project`](skills/release-notes-project) | End users and customers | The production branch or tag | Date |
+| [`release-notes-stakeholder`](skills/release-notes-stakeholder) | Managers, clients, and product owners | A branch that the user selects | Date and contributor |
+
+After you install the `spec100` plugin, ask for release notes, or run `/spec100:release-notes-project` or `/spec100:release-notes-stakeholder`. Other tools can use the portable folders under `skills/`. Install a folder the same way as `spec100-setup`, and keep its `scripts/` folder.
+
+Each skill writes a JSON file and one offline HTML page. The defaults are `release-notes/project.*` and `release-notes/stakeholder.*`. The page shows the changes from new to old. The text obeys ASD-STE100 Simplified Technical English.
+
+How a run works:
+
+1. The bundled script reads the commits after the last recorded commit. It writes nothing in this step.
+2. The agent writes the entries in a draft file. It can leave out commits that are not for the audience.
+3. The script checks the draft and adds the entries to the JSON file. Then it writes the HTML page again from the JSON file.
+
+A second run adds only the new changes. The script refuses a commit that an entry already lists, a commit outside the collected range, a sentence of more than 25 words, and an HTML file that it did not write. Contributor tags come from the commit authors and the `Co-authored-by` trailers. For a merge, the tags name the authors of the merged commits. The project page stores no names.
+
+Each file write goes to a temporary file first and then a rename. A lock file stops two runs at the same time. The JSON write and the HTML write are two operations. If a run stops between them, the `render` command of the script corrects the page.
+
 ## Add tools, migrate, and recover
 
 Ask the setup skill to add an integration. Its runtime command supports repeated `--tool` options:

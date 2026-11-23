@@ -3,9 +3,9 @@ const fs                           = require('node:fs');
 const path                             = require('node:path');
 const { createHash, randomUUID }                               = require('node:crypto');
 
-const VERSION = '2.2.0';
+const VERSION = '2.3.0';
 // Older manifests stay readable after a version increase.
-const SUPPORTED_VERSIONS = ['1.0.0', '2.0.0', '2.1.0', VERSION];
+const SUPPORTED_VERSIONS = ['1.0.0', '2.0.0', '2.1.0', '2.2.0', VERSION];
 const BEGIN = '<!-- spec100:begin -->';
 const END = '<!-- spec100:end -->';
 const INDEX = 'harness/project-index.md';

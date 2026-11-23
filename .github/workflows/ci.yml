@@ -15,4 +15,4 @@ jobs:
       - run: npm install --ignore-scripts --no-audit --no-fund
       - run: npm run check
       - name: Ensure committed runtime matches source
-        run: git diff --exit-code -- plugins/spec100 skills/spec100-setup
+        run: git diff --exit-code -- plugins/spec100 skills/spec100-setup skills/release-notes-project skills/release-notes-stakeholder
