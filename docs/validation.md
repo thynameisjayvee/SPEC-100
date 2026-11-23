@@ -20,6 +20,18 @@ CI is configured for Windows, Linux, and macOS with Node 22.13.0 and 24. The loc
 
 A fresh Windows CI checkout exposed a CRLF-dependent setup-skill rename. The generator now normalizes its source inputs, repository text uses LF, and a regression test builds from an explicit CRLF fixture. All three focused package/generation tests passed after this correction. The shared runtime source and generated runtime hashes below are unchanged.
 
+## Review update on 2026-11-23 (version 2.1.0)
+
+A review found gate bypasses, hook failure loops, Windows CRLF failures, and hook launchers that failed open after a project move. See `thoughts/research/2026-11-23-harness-review.md` and `thoughts/plans/2026-11-23-harness-review-fixes.md`. A reproduction script confirmed 15 defects on the 2.0.0 runtime and none on the 2.1.0 runtime. An independent security review confirmed most of them and added four more. Thirteen new regression tests fail on the 2.0.0 runtime and pass on 2.1.0.
+
+| Environment | Node | Result |
+|---|---|---|
+| macOS (Darwin 25.3, Apple Git 2.50.1) | 24.14.1 | 77 tests: 77 passed, 0 failed, 0 skipped |
+
+On a project with 1,800 tracked files, a PreToolUse hook with recorded capability evidence took 0.17 s with 2.1.0 and 0.83 s with 2.0.0. The 2.1.0 PreToolUse cost no longer grows with the number of project files. Stop and SessionStart still hash all project files.
+
+Windows and Linux results for 2.1.0 are pending the CI matrix. The CRLF and Windows path tests ran as simulations on macOS. The Windows executable-bit source (the Git index) has no Windows run yet.
+
 ## Independent review
 
 A forward test found a project-local bootstrap collision. A second pass found that ignored, unchanged bootstrap assets were missing from the initial index. Both were fixed and given regression coverage.
