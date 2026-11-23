@@ -438,7 +438,7 @@ test('portable setup package is self-contained and matches the Claude runtime', 
 test('a CRLF source checkout generates the correct Claude skill and identical runtime', t => {
   const f = fixture(t, false), checkout = path.join(f.base, 'crlf checkout');
   fs.mkdirSync(path.join(checkout, 'plugins/spec100/skills/setup'), { recursive: true });
-  for (const name of ['src/runtime.cts', 'scripts/build.mjs', 'skills/spec100-setup/SKILL.md']) {
+  for (const name of ['src/runtime.cts', 'src/release-notes.cts', 'scripts/build.mjs', 'skills/spec100-setup/SKILL.md', 'skills/release-notes-project/SKILL.md', 'skills/release-notes-stakeholder/SKILL.md']) {
     const file = path.join(checkout, name); fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, fs.readFileSync(path.join(repo, name), 'utf8').replace(/\r?\n/g, '\r\n'));
   }
@@ -447,6 +447,12 @@ test('a CRLF source checkout generates the correct Claude skill and identical ru
   assert.equal(result.status, 0, result.stderr);
   assert.match(fs.readFileSync(path.join(checkout, 'plugins/spec100/skills/setup/SKILL.md'), 'utf8'), /^name: setup$/m);
   assert.deepEqual(fs.readFileSync(path.join(checkout, 'plugins/spec100/runtime/spec100.cjs')), fs.readFileSync(runtime));
+  for (const skill of ['release-notes-project', 'release-notes-stakeholder']) {
+    const notes = `skills/${skill}/scripts/release-notes.cjs`;
+    assert.deepEqual(fs.readFileSync(path.join(checkout, notes)), fs.readFileSync(path.join(repo, notes)));
+    assert.deepEqual(fs.readFileSync(path.join(checkout, `plugins/spec100/${notes}`)), fs.readFileSync(path.join(repo, `plugins/spec100/${notes}`)));
+    assert.deepEqual(fs.readFileSync(path.join(checkout, `plugins/spec100/skills/${skill}/SKILL.md`)), fs.readFileSync(path.join(repo, `plugins/spec100/skills/${skill}/SKILL.md`)));
+  }
 });
 
 test('a project-local portable setup skill can bootstrap its own installation', t => {
@@ -821,7 +827,7 @@ test('setup upgrades a 2.0.0 installation and replaces launchers for another pat
   f.setup();
   const upgraded = JSON.parse(f.read('.claude/settings.json'));
   for (const event of ['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop']) assert.equal(upgraded.hooks[event].length, 1, event);
-  assert.equal(JSON.parse(f.read('harness/.runtime/manifest.json')).version, '2.2.0');
+  assert.equal(JSON.parse(f.read('harness/.runtime/manifest.json')).version, '2.3.0');
   assert.equal(f.cli(['check']).ok, true);
 });
 

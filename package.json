@@ -1,6 +1,6 @@
 {
   "name": "spec100-plugin",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "private": true,
   "description": "SPEC-100 project harness for coding agents",
   "type": "module",
@@ -8,7 +8,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "node node_modules/typescript/bin/tsc --noEmit",
-    "test": "npm run build && node test/runtime.test.mjs",
+    "test": "npm run build && node test/runtime.test.mjs && node test/release-notes.test.mjs",
     "check": "npm run typecheck && npm test"
   },
   "devDependencies": {
