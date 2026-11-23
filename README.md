@@ -14,7 +14,7 @@ Install that entire folder with your tool's skill installer, or copy it into the
 Copy-Item -LiteralPath 'D:\path\to\SPEC-100\skills\spec100-setup' -Destination '.agents\skills\spec100-setup' -Recurse
 ```
 
-Create `.agents/skills` first if needed. On macOS/Linux, copy the same folder with your file manager or `cp -R`. Preserve the `scripts/` and `assets/` directories.
+Create `.agents/skills` first if needed. On macOS/Linux, use `mkdir -p .agents/skills && cp -R /path/to/SPEC-100/skills/spec100-setup .agents/skills/`. Preserve the `scripts/` and `assets/` directories.
 
 Then ask the active coding agent to use `spec100-setup` for this project. In Codex, use `$spec100-setup`; in Antigravity, select the skill or use `/spec100-setup` where available. Reload the client if discovery requires it. Name any additional integrations you want; setup retains those already installed.
 
@@ -69,7 +69,11 @@ Codex uses `$spec100-research`, `$spec100-plan`, `$spec100-iterate`, `$spec100-i
 
 Customize canonical files under `harness/`. Native wrappers read those files. Setup preserves customized context, rules, role instructions, skills, learnings, and thoughts. It preserves unrelated root instructions and hook settings. Do not edit generated native wrappers; setup reports modified wrappers instead of overwriting them.
 
-The project index includes tracked and unignored project files, directories, empty folders, and installed harness assets. Dependencies, caches, build output, and Git internals are excluded. Git's ignore rules also work for projects without a repository; temporary Git metadata is created outside the project and removed afterward. Symbolic links are indexed as leaves.
+The project index includes tracked and unignored project files, directories, empty folders, and installed harness assets. Dependencies, caches, build output, and Git internals are excluded from the index. Evidence fingerprints still include tracked files in folders such as `build/` or `vendor/`. Git's ignore rules also work for projects without a repository; temporary Git metadata is created outside the project and removed afterward. Symbolic links are indexed as leaves.
+
+Hook commands contain no project path. They find `harness/.runtime/spec100.cjs` from the Claude project folder or the current folder. A committed settings file therefore works after a clone or a move. If a hook cannot find the runtime, PreToolUse blocks the tool call and other events report a non-blocking error.
+
+Text comparisons and evidence fingerprints treat CRLF and LF line endings as equal. A Windows checkout with `core.autocrlf=true` therefore passes the same checks as a macOS or Linux checkout. On Windows, the fingerprint reads the executable bit of tracked files from the Git index.
 
 ## Gates and native activation
 
@@ -82,6 +86,8 @@ Before implementation, inspect the active client's native hook manager and indep
 - Generic mode has no native hooks. Research, planning, and structural checks remain available; implementation cannot pass the hook capability gate.
 
 These are cooperative local gates. The runtime cannot authenticate agent attestations, human responses, or native hook activation independently. Hooks do not sandbox arbitrary shell scripts or control edits made outside the selected coding tool. No absent test, review, screenshot, or approval can be recorded as successful execution.
+
+The PreToolUse hook blocks direct file-tool writes to `harness/learnings.md`, `harness/.runtime/`, `harness/thoughts/<topic>/run.json`, `.spec100-install.json`, and `.spec100-write.lock`. It resolves case differences, relative paths, and symbolic links before it compares paths. Writes to `.claude/settings.json`, `.claude/settings.local.json`, `.codex/hooks.json`, and `.agents/hooks.json` need approval like other high-risk actions. A command that names `spec100` together with `workflow approve` needs a human decision in every form, not only the standalone form. A deliberately disguised command can still pass this text check. A hook error blocks only a PreToolUse call. Errors in other events do not block, so a bad record cannot make a Stop hook loop.
 
 Code, plan, and relevant instruction/configuration changes invalidate affected evidence. Index/layout refreshes do not invalidate it. Use one active writer per project. Runs retain explicit tool/session ownership; switching tools does not silently transfer an active run or reset its review count. The runtime never creates PRs, merges, deploys, resets user changes, or creates worktrees automatically.
 
@@ -97,9 +103,11 @@ node <bundled-runtime> setup --root <project> --draft <temporary-json> --tool co
 
 The setup skill supplies actual quoted paths and the evidence-based draft. Remove `--dry-run` only when setup is requested. With no tool option, setup retains installed integrations or defaults a new project to Claude.
 
+To upgrade from 2.0.0 to 2.1.0, run setup again. Setup replaces the old hook commands, which contained an absolute project path. The changed hook configuration makes capability evidence of active runs stale, so record capability evidence again. Evidence for a file that contains CRLF line endings, or a tracked file in an excluded folder such as `build/` or `vendor/`, also becomes stale once. Review rounds are kept.
+
 Version 1 manifests are treated as Claude installations. Known generated templates migrate automatically. Existing owned links become regular wrappers. Customized legacy skills or rules with Claude-specific instructions require a targeted manual migration; setup reports the exact file and stops before any writes. Preserve those custom instructions when updating tool-specific wording. Migration preserves evidence records and review counts, but changes to installed instructions can make current evidence stale.
 
-If `.spec100-install.json` remains after interruption, run the setup skill's recovery path. The journal restores prior files and removes empty directories created by installation. Do not discard it. A `.spec100-write.lock` prevents overlapping runtime writers. Recovery can release a stale local lock only when its process is no longer running. Unknown-host or active-process locks require inspection.
+If `.spec100-install.json` remains after interruption, run the setup skill's recovery path. The journal restores prior files and removes empty directories created by installation. Do not discard it. A `.spec100-write.lock` prevents overlapping runtime writers. Each runtime writer releases a stale local lock when its process is no longer running. Unknown-host, unreadable, or active-process locks require inspection. A PostToolUse hook skips its index refresh when another writer holds the lock.
 
 ## Read-only CI check
 
