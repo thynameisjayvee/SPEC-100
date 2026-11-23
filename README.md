@@ -93,6 +93,28 @@ Code, plan, and relevant instruction/configuration changes invalidate affected e
 
 Non-software work retains checkpoints, active hooks, risk, and high-risk approval. It omits software-specific review and UAT gates.
 
+## Per-turn router (optional)
+
+The router selects a model and an effort level for each user turn in Claude Code. It is off by default. Ask the setup skill to enable it, or run setup with `--router on`. `--router off` removes it. Setup without the flag keeps the current state. The router needs the Claude integration.
+
+How it works:
+
+1. A `UserPromptSubmit` hook sends the prompt text to Haiku. The call is `claude -p --model haiku --safe-mode` with no tools. It uses your current Claude Code login.
+2. Haiku returns a model (`haiku`, `sonnet`, or `opus`) and an effort level (`low`, `medium`, `high`, or `xhigh`). For a short follow-up such as "continue", it returns `same`, and the session keeps the previous route.
+3. The hook gives the route to the session. The session writes a `Route: <model>/<effort>` line and passes the model and effort to the Agent tool for the work of the turn.
+
+Fable is a route only when the prompt contains the word "Fable". The runtime adds Fable to the allowed values from the prompt text, and it rejects a Fable answer that it did not allow. The router model does not make this decision. `max` effort is never a route.
+
+Limits:
+
+- Claude Code has no documented method that changes the model of the main session for each turn. The main session keeps its model. It reads the prompt, delegates, and reports. The routed subagent does the tool work. A turn without tool work gets a direct answer from the main session.
+- The route is an instruction, like the other cooperative gates. The runtime cannot force the session to delegate.
+- The router sees only the current prompt, not the conversation.
+- Each routed turn adds about 3 to 5 seconds and one small Haiku request (about $0.0003 in the recorded check).
+- A router error gives no route. It never blocks a prompt. The hook has a 45-second limit, and the classifier has a 30-second limit.
+- The hook starts `claude` from `PATH`. Set `SPEC100_CLAUDE_BIN` to an executable or a JavaScript entry point when `claude` is not on `PATH`. On Windows, a `claude.cmd` file cannot start without a shell, so use `claude.exe` or `SPEC100_CLAUDE_BIN`.
+- Codex and Antigravity have no router.
+
 ## Add tools, migrate, and recover
 
 Ask the setup skill to add an integration. Its runtime command supports repeated `--tool` options:
@@ -101,7 +123,7 @@ Ask the setup skill to add an integration. Its runtime command supports repeated
 node <bundled-runtime> setup --root <project> --draft <temporary-json> --tool codex --tool antigravity --dry-run
 ```
 
-The setup skill supplies actual quoted paths and the evidence-based draft. Remove `--dry-run` only when setup is requested. With no tool option, setup retains installed integrations or defaults a new project to Claude.
+Add `--router on` or `--router off` to the same command to change the per-turn router. The setup skill supplies actual quoted paths and the evidence-based draft. Remove `--dry-run` only when setup is requested. With no tool option, setup retains installed integrations or defaults a new project to Claude.
 
 To upgrade from 2.0.0 to 2.1.0, run setup again. Setup replaces the old hook commands, which contained an absolute project path. The changed hook configuration makes capability evidence of active runs stale, so record capability evidence again. Evidence for a file that contains CRLF line endings, or a tracked file in an excluded folder such as `build/` or `vendor/`, also becomes stale once. Review rounds are kept.
 

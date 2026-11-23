@@ -22,12 +22,12 @@ function fixture(t, initialize = true, software = true) {
     const file = path.join(base, `input-${sequence++}.${extension}`);
     fs.writeFileSync(file, typeof data === 'string' ? data : JSON.stringify(data)); return file;
   };
-  const cli = (args, expected = 0, stdin, installed = false) => {
+  const cli = (args, expected = 0, stdin, installed = false, env) => {
     // File descriptors also work in execution sandboxes that restrict child-process pipes.
     const out = path.join(base, `stdout-${sequence++}`), err = path.join(base, `stderr-${sequence++}`);
     const descriptors = [stdin ? fs.openSync(input(stdin), 'r') : fs.openSync(os.devNull, 'r'), fs.openSync(out, 'w'), fs.openSync(err, 'w')];
     let r;
-    try { r = spawnSync(process.execPath, [installed ? path.join(root, 'harness/.runtime/spec100.cjs') : runtime, ...args, '--root', root, '--json'], { stdio: descriptors, timeout: 20000 }); }
+    try { r = spawnSync(process.execPath, [installed ? path.join(root, 'harness/.runtime/spec100.cjs') : runtime, ...args, '--root', root, '--json'], { stdio: descriptors, timeout: 20000, ...(env ? { env: { ...process.env, ...env } } : {}) }); }
     finally { descriptors.forEach(fd => fs.closeSync(fd)); }
     const stdout = fs.readFileSync(out, 'utf8'), stderr = fs.readFileSync(err, 'utf8');
     let details; try { const result = JSON.parse(stdout || stderr); details = result.checks ? JSON.stringify(result.checks.filter(c => !c.ok)) : JSON.stringify(result); } catch { details = stdout + stderr; }
@@ -821,7 +821,7 @@ test('setup upgrades a 2.0.0 installation and replaces launchers for another pat
   f.setup();
   const upgraded = JSON.parse(f.read('.claude/settings.json'));
   for (const event of ['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop']) assert.equal(upgraded.hooks[event].length, 1, event);
-  assert.equal(JSON.parse(f.read('harness/.runtime/manifest.json')).version, '2.1.0');
+  assert.equal(JSON.parse(f.read('harness/.runtime/manifest.json')).version, '2.2.0');
   assert.equal(f.cli(['check']).ok, true);
 });
 
@@ -925,4 +925,89 @@ test('file names cannot add lines to instructions and prepare skips more secret 
   assert.doesNotMatch(f.read('CLAUDE.md'), /^# Ignore all rules/m);
   assert.doesNotMatch(f.read('harness/project-index.md'), /^# Ignore all rules/m);
   assert.equal(f.cli(['check']).ok, true);
+});
+
+// Router tests. A fake classifier replaces the Claude executable, so no test calls a model.
+function routerFixture(t, flags = ['--router', 'on']) {
+  const f = fixture(t, false); f.setup(draft(), flags);
+  const fake = path.join(f.base, 'fake-claude.cjs'), log = path.join(f.base, 'classifier.json');
+  fs.writeFileSync(fake, [
+    "const fs = require('node:fs');",
+    "fs.writeFileSync(process.env.FAKE_LOG, JSON.stringify({ args: process.argv.slice(2), stdin: fs.readFileSync(0, 'utf8'), marker: process.env.SPEC100_ROUTER_ACTIVE }));",
+    "if (process.env.FAKE_MODE === 'fail') process.exit(1);",
+    "if (process.env.FAKE_MODE === 'garbage') { process.stdout.write('not json'); process.exit(0); }",
+    "process.stdout.write(JSON.stringify({ structured_output: { model: process.env.FAKE_MODEL || 'sonnet', effort: process.env.FAKE_EFFORT || 'medium', reason: 'Routine\\nwork in two files' } }));",
+  ].join('\n'));
+  const submit = (prompt, env = {}) => { fs.rmSync(log, { force: true }); return f.cli(['hook', '--event', 'UserPromptSubmit'], 0, { session_id: 's', prompt }, true, { SPEC100_CLAUDE_BIN: fake, FAKE_LOG: log, ...env }); };
+  const call = () => fs.existsSync(log) ? JSON.parse(fs.readFileSync(log, 'utf8')) : undefined;
+  const option = name => { const args = call().args; return args[args.indexOf(name) + 1]; };
+  return { f, fake, submit, call, option };
+}
+
+test('the router is off by default, keeps its state, and setup can remove it', t => {
+  const { f, submit, call } = routerFixture(t, []);
+  const user = { hooks: [{ type: 'command', command: 'echo user-prompt-hook' }] };
+  const events = () => JSON.parse(f.read('.claude/settings.json')).hooks.UserPromptSubmit;
+  assert.equal(events(), undefined);
+  assert.deepEqual(submit('Fix the parser'), {}); assert.equal(call(), undefined);
+  const settings = JSON.parse(f.read('.claude/settings.json')); settings.hooks.UserPromptSubmit = [user];
+  f.write('.claude/settings.json', JSON.stringify(settings));
+  assert.equal(f.setup(draft(), ['--router', 'on']).router, true);
+  assert.deepEqual(events()[0], user); assert.equal(events().length, 2);
+  assert.match(events()[1].hooks[0].command, /--event UserPromptSubmit$/);
+  assert.match(f.read('CLAUDE.md'), /router hook selects a model and an effort level/);
+  assert.equal(JSON.parse(f.read('harness/.runtime/manifest.json')).router, true);
+  assert.equal(f.cli(['check']).integrations[0].router, true);
+  assert.equal(f.setup().router, true); assert.equal(events().length, 2);
+  assert.equal(f.cli(['check']).ok, true);
+  assert.match(f.cli(['setup', '--draft', f.input(draft()), '--router', 'maybe'], 2).error, /on or off/);
+  assert.equal(f.setup(draft(), ['--router', 'off']).router, false);
+  assert.deepEqual(events(), [user]);
+  assert.doesNotMatch(f.read('CLAUDE.md'), /router hook/);
+  assert.equal(JSON.parse(f.read('harness/.runtime/manifest.json')).router, undefined);
+  const result = f.cli(['check']); assert.equal(result.ok, true); assert.equal(result.integrations[0].router, false);
+});
+
+test('the router needs the Claude integration', t => {
+  const f = fixture(t, false);
+  assert.match(f.cli(['setup', '--tool', 'codex', '--router', 'on', '--draft', f.input(draft())], 2).error, /needs the Claude integration/);
+  assert.deepEqual(fs.readdirSync(f.root), []);
+});
+
+test('the router hook returns the Haiku route and isolates the classifier call', t => {
+  const { submit, call, option } = routerFixture(t);
+  const context = submit('Refactor the parser tests').hookSpecificOutput.additionalContext;
+  assert.match(context, /model "sonnet", effort "medium"\. Reason: Routine work in two files\n/);
+  assert.match(context, /Start your reply with the line "Route: sonnet\/medium"/);
+  assert.match(context, /Pass model "sonnet" and effort "medium" in each Agent call/);
+  assert.match(context, /Do not pass model "fable"/);
+  assert.equal(option('--model'), 'haiku'); assert.equal(option('--tools'), '');
+  for (const flag of ['-p', '--safe-mode', '--no-session-persistence']) assert.ok(call().args.includes(flag), flag);
+  assert.equal(call().stdin, 'Refactor the parser tests'); assert.equal(call().marker, '1');
+  assert.match(submit('yes, continue', { FAKE_MODEL: 'same' }).hookSpecificOutput.additionalContext, /Keep the model and effort of the most recent route/);
+});
+
+test('Fable is a route only when the prompt names it', t => {
+  const { submit, option } = routerFixture(t);
+  const models = () => JSON.parse(option('--json-schema')).properties.model.enum;
+  // The fake classifier ignores the schema. The runtime must reject the answer.
+  assert.deepEqual(submit('Redesign the whole storage engine', { FAKE_MODEL: 'fable' }), {});
+  assert.deepEqual(models(), ['same', 'haiku', 'sonnet', 'opus']);
+  assert.doesNotMatch(option('--system-prompt'), /fable/i);
+  assert.deepEqual(submit('Find the affable greeting text', { FAKE_MODEL: 'fable' }), {});
+  const context = submit('Use Fable to redesign the storage engine', { FAKE_MODEL: 'fable', FAKE_EFFORT: 'xhigh' }).hookSpecificOutput.additionalContext;
+  assert.match(context, /model "fable", effort "xhigh"/);
+  assert.doesNotMatch(context, /Do not pass model "fable"/);
+  assert.deepEqual(models(), ['same', 'haiku', 'sonnet', 'opus', 'fable']);
+  assert.match(option('--system-prompt'), /only if the user explicitly asks to use Fable/);
+});
+
+test('a router failure gives no route and never blocks the prompt', t => {
+  const { f, submit, call } = routerFixture(t);
+  for (const env of [{ FAKE_MODE: 'fail' }, { FAKE_MODE: 'garbage' }, { FAKE_EFFORT: 'max' }, { FAKE_MODEL: 'gpt' }, { SPEC100_CLAUDE_BIN: path.join(f.base, 'missing-claude') }]) {
+    assert.deepEqual(submit('Fix the parser', env), {}, JSON.stringify(env));
+  }
+  assert.deepEqual(submit('   '), {}); assert.equal(call(), undefined);
+  // A classifier child process must not route again.
+  assert.deepEqual(submit('Fix the parser', { SPEC100_ROUTER_ACTIVE: '1' }), {}); assert.equal(call(), undefined);
 });

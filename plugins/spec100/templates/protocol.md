@@ -87,7 +87,7 @@ Recorded approval must quote the actual human response. Native permissions remai
 
 ## Setup and tool selection
 
-Use the portable spec100-setup skill for active-session analysis. The runtime does not call a model. `setup --draft <json> --tool claude --tool codex --tool antigravity` adds the selected integrations; repeat `--tool` as needed. Without this flag, setup retains existing integrations or defaults a new project to Claude. `--dry-run` previews all writes. `recover` restores an interrupted installation. All installed runtime resources are self-contained.
+Use the portable spec100-setup skill for active-session analysis. Setup and checks do not call a model. Only the optional router hook calls a model (Haiku), once for each turn. `setup --draft <json> --tool claude --tool codex --tool antigravity` adds the selected integrations; repeat `--tool` as needed. Without this flag, setup retains existing integrations or defaults a new project to Claude. `--router on` adds a Claude `UserPromptSubmit` hook. For each turn, Haiku selects a model and an effort level, and the session passes them to the Agent tool. Fable is a route only when the prompt names it. `--router off` removes the hook. `--dry-run` previews all writes. `recover` restores an interrupted installation. All installed runtime resources are self-contained.
 
 `check --tool codex --json` checks the core, all workflow evidence, and the selected integration. Without `--tool`, check validates all installed integrations. Configured hooks are reported separately from native activation, which this read-only command cannot authenticate. Exit 0 confirms local structure and recorded evidence, not native trust or independently authenticated attestations.
 

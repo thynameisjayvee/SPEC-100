@@ -3,9 +3,9 @@ const fs                           = require('node:fs');
 const path                             = require('node:path');
 const { createHash, randomUUID }                               = require('node:crypto');
 
-const VERSION = '2.1.0';
+const VERSION = '2.2.0';
 // Older manifests stay readable after a version increase.
-const SUPPORTED_VERSIONS = ['1.0.0', '2.0.0', VERSION];
+const SUPPORTED_VERSIONS = ['1.0.0', '2.0.0', '2.1.0', VERSION];
 const BEGIN = '<!-- spec100:begin -->';
 const END = '<!-- spec100:end -->';
 const INDEX = 'harness/project-index.md';
@@ -154,7 +154,7 @@ const EXCLUDED = new Set(['.git', 'node_modules', 'vendor', '.cache', 'dist', 'b
 const SECRET = /(?:^|\/)(?:\.env(?:\..*)?|credentials(?:\..*)?|[^/]*secret[^/]*|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?|\.npmrc|\.pypirc|\.netrc|.*\.(?:pem|key|p12|pfx|jks|keystore|tfvars|tfstate))$/i;
 // Harness topics can have names such as build or vendor. Exclusions apply only outside harness/.
 function excluded(name        )          { return !name.startsWith('harness/') && name.split('/').some(part => EXCLUDED.has(part)); }
-                                                                                                                                                                                         
+                                                                                                                                                                                                           
 function manifestTools(manifest          )         { return manifest.tools ?? ['claude']; }
                                                                                                                                                                                                                                           
 function git(args          , root        , gitdir         )         {
@@ -278,11 +278,12 @@ function indexFile(files          )         {
   return `# Project index\n\n${links}\n`;
 }
 // Root instructions stay small. The index is read on demand.
-function managedSection(files          , agentsImport         , shared = false)         {
+const ROUTER_RULE = 'A SPEC-100 router hook selects a model and an effort level for each turn. When it gives a route, pass that model and effort in the Agent tool call for the work of the turn.\n';
+function managedSection(files          , agentsImport         , shared = false, router = false)         {
   const folders = files.filter(name => /^[^/]+\/$/.test(name) && !excluded(name)).sort().map(name => `- \`${label(name)}\``).join('\n');
   const context = shared
     ? 'Before work, read harness/project-context.md, harness/learnings.md, and all three files in harness/rules/. Follow ASD-STE100 Simplified Technical English in applicable technical communication.\nUse the spec100-research, spec100-plan, spec100-iterate, spec100-implement, and spec100-check skills. If this tool does not discover skills, read the matching canonical file in harness/skills/.\nRequired independent agents, verification, risk, approval, and UAT gates still apply. Missing capabilities block implementation. Use one active writer per project.\n'
-    : `${agentsImport ? '\n@AGENTS.md\n' : ''}\n@harness/project-context.md\n@harness/learnings.md\n@harness/rules/STE-100.md\n@harness/rules/YAGNI-KISS.md\n@harness/rules/atomic-operations.md\n\nUse /spec100:research, /spec100:plan, /spec100:iterate, /spec100:implement, and /spec100:check.\n`;
+    : `${agentsImport ? '\n@AGENTS.md\n' : ''}\n@harness/project-context.md\n@harness/learnings.md\n@harness/rules/STE-100.md\n@harness/rules/YAGNI-KISS.md\n@harness/rules/atomic-operations.md\n\nUse /spec100:research, /spec100:plan, /spec100:iterate, /spec100:implement, and /spec100:check.\n${router ? ROUTER_RULE : ''}`;
   return `${BEGIN}\n# SPEC-100 agent harness\n\n${context}\nCanonical skills: harness/skills/. Topic artifacts: harness/thoughts/.\n\n## Project layout\n\nFind project files in ${INDEX} before you search. Read that file on demand; do not import it.\n\nTop-level folders:\n${folders}\n${END}`;
 }
 function withSection(previous        , section        )         {
@@ -298,7 +299,7 @@ function rootFiles(manifest          )           {
 }
 function rootContent(root        , name        , files          , manifest          )         {
   const file = safe(root, name);
-  return withSection(exists(file) ? fs.readFileSync(file, 'utf8') : '', managedSection(files, exists(path.join(root, 'AGENTS.md')) || rootFiles(manifest).includes('AGENTS.md'), name === 'AGENTS.md'));
+  return withSection(exists(file) ? fs.readFileSync(file, 'utf8') : '', managedSection(files, exists(path.join(root, 'AGENTS.md')) || rootFiles(manifest).includes('AGENTS.md'), name === 'AGENTS.md', manifest.router === true));
 }
 function refreshIndex(root        )       {
   const manifest = installed(root), files = inventory(root);
@@ -340,7 +341,7 @@ function skillWrapper(name        )         {
 
 function hookPath(host      )         { return host === 'claude' ? '.claude/settings.json' : host === 'codex' ? '.codex/hooks.json' : '.agents/hooks.json'; }
 const HOOK_EVENTS = ['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop'];
-function hookDefinitions(host      )                        {
+function hookDefinitions(host      , router = false)                        {
   // The launcher has no project path, so a committed settings file works after a clone or a move.
   // It finds the runtime from the Claude project folder or the current folder. It contains no
   // $, %, !, backtick, or double quote, so cmd, PowerShell, and POSIX shells pass it unchanged.
@@ -348,17 +349,19 @@ function hookDefinitions(host      )                        {
   const starts = host === 'claude' ? 'process.env.CLAUDE_PROJECT_DIR,process.cwd()' : 'process.cwd()';
   const script = `(()=>{const p=require('path'),f=require('fs');for(const s of [${starts}]){let d=s;while(d){const r=p.join(d,'harness','.runtime','spec100.cjs');if(f.existsSync(r))return require(r).main(process.argv.slice(1));const n=p.dirname(d);d=n===d?'':n}}process.stderr.write('SPEC-100 runtime not found. Run the setup skill.');process.exitCode=process.argv.includes('PreToolUse')?2:1})()`;
   const command = `node -e "${script}" -- hook --tool ${host} --event `;
-  return Object.fromEntries(HOOK_EVENTS.map(event => [event, [{ ...(event === 'PreToolUse' || event === 'PostToolUse' ? { matcher: host === 'antigravity' ? '.*' : 'Bash|Write|Edit|MultiEdit|NotebookEdit|apply_patch' } : {}), hooks: [{ type: 'command', command: command + event, timeout: 15 }] }]]));
+  return Object.fromEntries([...HOOK_EVENTS.map(event => [event, [{ ...(event === 'PreToolUse' || event === 'PostToolUse' ? { matcher: host === 'antigravity' ? '.*' : 'Bash|Write|Edit|MultiEdit|NotebookEdit|apply_patch' } : {}), hooks: [{ type: 'command', command: command + event, timeout: 15 }] }]]),
+    // The router calls a model once for each prompt, so its hook needs a longer limit than the classifier limit.
+    ...(router && host === 'claude' ? [['UserPromptSubmit', [{ hooks: [{ type: 'command', command: command + 'UserPromptSubmit', timeout: 45 }] }]]] : [])]);
 }
 // Launchers from earlier versions. Setup replaces them, including launchers that name another project path.
 const LEGACY_LAUNCHER = /^node -e "require\(Buffer\.from\('[A-Za-z0-9+/=]+','base64'\)\.toString\(\)\)\.main\(process\.argv\.slice\(1\)\)" -- hook --tool (claude|codex|antigravity) --event (?:SessionStart|PreToolUse|PostToolUse|Stop)$/;
 function isHarnessHook(item     , host      )          {
   if (!Array.isArray(item?.hooks) || item.hooks.length !== 1 || typeof item.hooks[0]?.command !== 'string') return false;
   const command         = item.hooks[0].command;
-  const current = Object.values(hookDefinitions(host)).flatMap(definitions => definitions.map(item => item.hooks[0].command));
+  const current = Object.values(hookDefinitions(host, true)).flatMap(definitions => definitions.map(item => item.hooks[0].command));
   return current.includes(command) || command.match(LEGACY_LAUNCHER)?.[1] === host || host === 'claude' && /^node "\$\{CLAUDE_PROJECT_DIR\}\/harness\/\.runtime\/spec100\.cjs" hook --event (SessionStart|PreToolUse|PostToolUse|Stop)$/.test(command);
 }
-function settings(root        , host      )      {
+function settings(root        , host      , router         )      {
   const file = safe(root, hookPath(host));
   const result = exists(file) ? readJSON(file) : {};
   assert(result && typeof result === 'object' && !Array.isArray(result), `${host} settings must be a JSON object`);
@@ -371,19 +374,26 @@ function settings(root        , host      )      {
   }
   result.hooks ??= {};
   assert(typeof result.hooks === 'object' && !Array.isArray(result.hooks), `${host} hooks must be an object`);
-  for (const [event, definitions] of Object.entries(hookDefinitions(host))) {
+  const wanted = hookDefinitions(host, router);
+  // Visit every event that the harness can own, so that setup also removes a router hook that is now off.
+  for (const event of Object.keys(hookDefinitions(host, true))) {
     const existing = result.hooks[event] ?? [];
     assert(Array.isArray(existing), `${host} hooks.${event} must be an array`);
-    result.hooks[event] = [...existing.filter((item     ) => !isHarnessHook(item, host)), ...definitions];
+    const merged = [...existing.filter((item     ) => !isHarnessHook(item, host)), ...(wanted[event] ?? [])];
+    if (merged.length) result.hooks[event] = merged; else delete result.hooks[event];
   }
   return result;
 }
-function setup(root        , draft     , dryRun = false, requested         = [])      {
+function setup(root        , draft     , dryRun = false, requested         = [], routerOption         )      {
   assert(!exists(safe(root, JOURNAL)), 'Interrupted installation detected. Run runtime recover first.');
   validateDraft(root, draft);
   const old = exists(safe(root, 'harness/.runtime/manifest.json')) ? installed(root) : undefined;
   if (old) assert(old.software === draft.software, 'Project type changed; preserve the existing harness and migrate explicitly.');
   const tools = [...new Set([...(old ? manifestTools(old) : []), ...(requested.length ? requested : old ? [] : ['claude']          )])].sort()          ;
+  assert(routerOption === undefined || routerOption === 'on' || routerOption === 'off', '--router must be on or off');
+  // Without the flag, setup keeps the current router state. A new installation has no router.
+  const router = routerOption === undefined ? old?.router === true : routerOption === 'on';
+  assert(!router || tools.includes('claude'), 'The router needs the Claude integration. Add --tool claude.');
   const templates = pluginTemplates(), legacy                         = readJSON(path.join(templates, 'legacy-v1.json'));
   const entries          = [], generated = { ...old?.generated };
   const owned = new Set(old?.owned ?? []), links = { ...old?.links };
@@ -442,7 +452,7 @@ function setup(root        , draft     , dryRun = false, requested         = [])
   for (const host of tools) {
     if (host === 'generic') continue;
     for (const role of roles) put(`${host === 'claude' ? '.claude' : host === 'codex' ? '.codex' : '.agents'}/agents/spec100-${role}.${host === 'codex' ? 'toml' : 'md'}`, nativeAgent(role, host), false, true);
-    put(hookPath(host), json(settings(root, host)));
+    put(hookPath(host), json(settings(root, host, router)));
   }
   for (const dir of [...(tools.includes('claude') ? ['.claude'] : []), ...(shared ? ['.agents'] : [])]) {
     for (const skill of ['check', ...SKILLS]) put(`${dir}/skills/spec100-${skill}/SKILL.md`, skillWrapper(skill), false, true);
@@ -451,7 +461,7 @@ function setup(root        , draft     , dryRun = false, requested         = [])
     put(destination + 'scripts/spec100.cjs', fs.readFileSync(__filename, 'utf8'), false, true);
     copyTemplates(templates, '', destination + 'assets/templates/', true);
   }
-  const manifest           = { version: VERSION, schema: 2, tools, software: draft.software, agents: roles, owned: [], links, generated };
+  const manifest           = { version: VERSION, schema: 2, tools, software: draft.software, agents: roles, owned: [], links, generated, ...(router ? { router } : {}) };
   for (const name of ['harness/.runtime/manifest.json', INDEX, ...rootFiles(manifest)]) owned.add(name);
   manifest.owned = [...owned].sort();
   put('harness/.runtime/manifest.json', json(manifest));
@@ -464,7 +474,7 @@ function setup(root        , draft     , dryRun = false, requested         = [])
   put(INDEX, indexFile([...files].sort()));
   for (const name of rootFiles(manifest)) put(name, rootContent(root, name, [...files].sort(), manifest));
   if (!dryRun) transaction(root, entries, ['harness/thoughts']);
-  return { version: VERSION, dryRun, tools, migrations, files: entries.map(e => e.path), commands: { claude: tools.includes('claude') ? ['setup', 'check', ...SKILLS].map(name => '/spec100:' + name) : [], portable: shared ? ['setup', 'check', ...SKILLS].map(name => 'spec100-' + name) : [] }, activation: 'unverified: inspect native hooks and agents in the active tool before implementation' };
+  return { version: VERSION, dryRun, tools, router, migrations, files: entries.map(e => e.path), commands: { claude: tools.includes('claude') ? ['setup', 'check', ...SKILLS].map(name => '/spec100:' + name) : [], portable: shared ? ['setup', 'check', ...SKILLS].map(name => 'spec100-' + name) : [] }, activation: 'unverified: inspect native hooks and agents in the active tool before implementation' };
 }
 
                                                                                                                                                     
@@ -779,11 +789,11 @@ function compliance(root        , selected         = [])      {
     add('integration.' + host + '.hooks', () => {
       const config = readJSON(safe(root, hookPath(host)));
       const groups = host === 'antigravity' ? config.spec100 : config.hooks;
-      configured = config.disableAllHooks !== true && groups?.enabled !== false && Object.entries(hookDefinitions(host)).every(([event, definitions]) => Array.isArray(groups?.[event]) && groups[event].some((item     ) => isHarnessHook(item, host) && item.matcher === definitions[0].matcher && item.hooks[0].type === 'command' && item.hooks[0].command === definitions[0].hooks[0].command && item.hooks[0].async !== true && item.hooks[0].enabled !== false));
+      configured = config.disableAllHooks !== true && groups?.enabled !== false && Object.entries(hookDefinitions(host, manifest.router === true)).every(([event, definitions]) => Array.isArray(groups?.[event]) && groups[event].some((item     ) => isHarnessHook(item, host) && item.matcher === definitions[0].matcher && item.hooks[0].type === 'command' && item.hooks[0].command === definitions[0].hooks[0].command && item.hooks[0].async !== true && item.hooks[0].enabled !== false));
       return configured;
     }, `Restore ${host} hooks with the setup skill, then inspect and trust them in the tool.`);
     // This read-only command cannot determine a client's trust state or available tools.
-    integrations.push({ tool: host, configured, activation: 'unverified', limitations: host === 'codex' ? ['Hooks need native trust. Read-only agent instructions do not create a separate sandbox.'] : host === 'antigravity' ? ['IDE custom subagents are unverified; required agent work is blocked there.'] : [] });
+    integrations.push({ tool: host, configured, activation: 'unverified', ...(host === 'claude' ? { router: manifest.router === true } : {}), limitations: host === 'codex' ? ['Hooks need native trust. Read-only agent instructions do not create a separate sandbox.'] : host === 'antigravity' ? ['IDE custom subagents are unverified; required agent work is blocked there.'] : [] });
   }
   add('index.current', () => {
     const files = inventory(root);
@@ -851,10 +861,65 @@ function capabilityUnavailable(root        , run     )          {
   const data = run.evidence.capabilities?.data;
   return !!data && (data.hooksActive !== true || installed(root).software && data.independentAgents !== true);
 }
+// Router: Haiku selects a model and an effort level for each turn. Claude Code has no hook output that changes the
+// model of the main session, so the session applies the route through the Agent tool model and effort parameters.
+const ROUTE_MODELS = ['haiku', 'sonnet', 'opus'];
+const ROUTE_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
+                                                               
+// Fable is an option only when the user names it. The runtime decides this from the prompt text, not the router model.
+function routeModels(prompt        )           { return [...ROUTE_MODELS, ...(/\bfable\b/i.test(prompt) ? ['fable'] : [])]; }
+function classify(prompt        )                    {
+  const models = ['same', ...routeModels(prompt)];
+  const schema = { type: 'object', properties: { model: { type: 'string', enum: models }, effort: { type: 'string', enum: ROUTE_EFFORTS }, reason: { type: 'string' } }, required: ['model', 'effort', 'reason'], additionalProperties: false };
+  const system = [
+    'You are a router for a coding agent. The user message is a request for that agent. Do not do the request.',
+    'Select the cheapest model and the lowest effort level that can do the work well.',
+    'Model haiku: lookups, small edits, formatting, short answers.',
+    'Model sonnet: routine coding in several files, tests, refactors, analysis.',
+    'Model opus: hard debugging, architecture, security work, and high-risk or ambiguous work.',
+    ...(models.includes('fable') ? ['Model fable: select it only if the user explicitly asks to use Fable for this request.'] : []),
+    'Effort low: simple work. Effort medium: usual work. Effort high: difficult work. Effort xhigh: the most difficult work only.',
+    'If the user names an available model or an effort level to use, select it.',
+    'If the request is a short follow-up that depends on earlier conversation, for example "yes" or "continue", return model "same".',
+    'Give a reason of 12 words or fewer.',
+  ].join(' ');
+  const binary = process.env.SPEC100_CLAUDE_BIN || 'claude';
+  // A JavaScript entry point (an npm installation or a test double) runs through Node.
+  const [command, prefix]                     = /\.[cm]?js$/i.test(binary) ? [process.execPath, [binary]] : [binary, []];
+  // Safe mode disables hooks in the child process. The environment marker is a second guard against a hook that starts itself.
+  const result = spawnSync(command, [...prefix, '-p', '--model', 'haiku', '--effort', 'low', '--safe-mode', '--tools', '', '--no-session-persistence', '--output-format', 'json', '--json-schema', JSON.stringify(schema), '--system-prompt', system],
+    { input: prompt.slice(0, 8000), encoding: 'utf8', timeout: 30000, cwd: os.tmpdir(), env: { ...process.env, SPEC100_ROUTER_ACTIVE: '1' }, maxBuffer: 4 * 1024 * 1024, windowsHide: true });
+  if (result.status !== 0) return undefined;
+  let answer     ;
+  try { answer = JSON.parse(result.stdout).structured_output; } catch { return undefined; }
+  // The schema is a request to the model. The runtime enforces the allowed values, including the Fable rule.
+  if (!answer || !models.includes(answer.model) || !ROUTE_EFFORTS.includes(answer.effort)) return undefined;
+  return { model: answer.model, effort: answer.effort, reason: String(answer.reason ?? '').replace(/\s+/g, ' ').trim().slice(0, 200) };
+}
+// A router failure gives no route. It must never block or change a prompt.
+function routeTurn(root        , input     )      {
+  if (installed(root).router !== true || process.env.SPEC100_ROUTER_ACTIVE) return {};
+  const prompt = typeof input.prompt === 'string' ? input.prompt.trim() : '';
+  const route = prompt ? classify(prompt) : undefined;
+  if (!route) return {};
+  const context = route.model === 'same'
+    ? 'SPEC-100 router (Haiku): this turn continues earlier work. Keep the model and effort of the most recent route. If no earlier route exists, do the work yourself.'
+    : [
+      `SPEC-100 router (Haiku) route for this turn: model "${route.model}", effort "${route.effort}". Reason: ${route.reason}`,
+      'Apply the route:',
+      `1. Start your reply with the line "Route: ${route.model}/${route.effort}".`,
+      `2. If the turn needs tool work, delegate that work through the Agent tool. Pass model "${route.model}" and effort "${route.effort}" in each Agent call. Use the SPEC-100 role agent when a SPEC-100 skill names one.`,
+      '3. If the turn needs no tool work, answer directly.',
+      '4. Keep orchestration, approvals, and evidence records in this conversation.',
+      ...(route.model === 'fable' ? [] : ['Do not pass model "fable" to the Agent tool in this turn.']),
+    ].join('\n');
+  return { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: context } };
+}
 function hook(root        , event        , input     , host       = 'claude')      {
   assert(host !== 'generic', 'Generic integration has no native hook contract');
   if (!exists(path.join(root, 'harness/.runtime/manifest.json'))) return {};
   assert(input && typeof input === 'object', 'Hook input must be a JSON object');
+  if (event === 'UserPromptSubmit') return host === 'claude' ? routeTurn(root, input) : {};
   // Check the retry guard before any run is read. A read error must not block every stop.
   if (event === 'Stop' && (input.stop_hook_active || host === 'antigravity' && (input.executionNum !== 0 || input.fullyIdle !== true))) return {};
   const session = host === 'antigravity' ? input.conversationId : input.session_id;
@@ -968,7 +1033,7 @@ function main(argv           = process.argv.slice(2))       {
   const [major, minor] = process.versions.node.split('.').map(Number);
   assert(major  > 22 || major === 22 && minor  >= 13, 'SPEC-100 requires Node.js >=22.13');
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: {
-    tool: { type: 'string', multiple: true }, root: { type: 'string' }, draft: { type: 'string' }, file: { type: 'string' }, topic: { type: 'string' }, name: { type: 'string' }, kind: { type: 'string' }, plan: { type: 'string' }, session: { type: 'string' }, event: { type: 'string' }, json: { type: 'boolean' }, 'dry-run': { type: 'boolean' }
+    tool: { type: 'string', multiple: true }, root: { type: 'string' }, draft: { type: 'string' }, file: { type: 'string' }, topic: { type: 'string' }, name: { type: 'string' }, kind: { type: 'string' }, plan: { type: 'string' }, session: { type: 'string' }, event: { type: 'string' }, json: { type: 'boolean' }, 'dry-run': { type: 'boolean' }, router: { type: 'string' }
   } });
   const selected = (values.tool ?? []).map(tool);
   const root = resolveRoot(values.root ?? (positionals[0] === 'hook' ? path.resolve(__dirname, '../..') : undefined));
@@ -989,7 +1054,7 @@ function main(argv           = process.argv.slice(2))       {
   try {
   let result     ;
   if (command === 'prepare') result = prepare(root);
-  else if (command === 'setup') result = setup(root, readJSON(path.resolve(required(values.draft, '--draft'))), values['dry-run'], selected);
+  else if (command === 'setup') result = setup(root, readJSON(path.resolve(required(values.draft, '--draft'))), values['dry-run'], selected, values.router);
   else if (command === 'recover') { recover(root); result = { recovered: true }; }
   else if (command === 'index') { refreshIndex(root); result = { refreshed: true }; }
   else if (command === 'check') { result = compliance(root, selected); process.exitCode = result.ok ? 0 : 1; }

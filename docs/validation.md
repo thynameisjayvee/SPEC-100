@@ -32,6 +32,16 @@ On a project with 1,800 tracked files, a PreToolUse hook with recorded capabilit
 
 Windows and Linux results for 2.1.0 are pending the CI matrix. The CRLF and Windows path tests ran as simulations on macOS. The Windows executable-bit source (the Git index) has no Windows run yet.
 
+## Per-turn router check on 2026-11-23 (version 2.2.0)
+
+See `thoughts/research/2026-11-23-turn-router.md` and `thoughts/plans/2026-11-23-turn-router.md`. Environment: macOS, Node 24.14.1, Claude Code 2.1.330, a claude.ai login, and no gateway.
+
+- The offline tests use a fake classifier. They cover the setup option, the hook output, the Fable rule, the failure paths, and the recursion guard.
+- Live classifier calls through the installed hook: "Use Fable to count the .txt files" gave `fable/low`. A lock-free B-tree design with proofs gave `opus/xhigh`. "Do not use Fable. Fix the typo in the README title." gave `haiku/low`. A one-function rename gave `haiku/low`. Each call took 3.0 s to 5.0 s.
+- Live session with the installed hooks and a Haiku main session: the router returned `sonnet/medium`. The main session wrote `Route: sonnet/medium` and called the Agent tool with `model: "sonnet"` and `effort: "medium"`. The subagent ran on `claude-sonnet-5-5`. SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, and Stop hooks exited 0 through the launcher.
+
+Not tested: an interactive session, a main session on Opus, Windows, Linux, and a session through a gateway or a cloud provider.
+
 ## Independent review
 
 A forward test found a project-local bootstrap collision. A second pass found that ignored, unchanged bootstrap assets were missing from the initial index. Both were fixed and given regression coverage.
