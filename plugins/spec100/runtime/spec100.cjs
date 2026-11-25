@@ -3,9 +3,9 @@ const fs                           = require('node:fs');
 const path                             = require('node:path');
 const { createHash, randomUUID }                               = require('node:crypto');
 
-const VERSION = '2.3.1';
+const VERSION = '2.4.0';
 // Older manifests stay readable after a version increase.
-const SUPPORTED_VERSIONS = ['1.0.0', '2.0.0', '2.1.0', '2.2.0', '2.3.0', VERSION];
+const SUPPORTED_VERSIONS = ['1.0.0', '2.0.0', '2.1.0', '2.2.0', '2.3.0', '2.3.1', VERSION];
 const BEGIN = '<!-- spec100:begin -->';
 const END = '<!-- spec100:end -->';
 const INDEX = 'harness/project-index.md';
@@ -143,6 +143,8 @@ const { spawnSync }                                      = require('node:child_p
 const os                           = require('node:os');
 const { parseArgs }                             = require('node:util');
 const SKILLS = ['research', 'plan', 'iterate', 'implement']         ;
+// Portable skills that setup copies unchanged into each native skill folder.
+const NOTES = ['release-notes-project', 'release-notes-stakeholder']         ;
 const TOOLS = ['claude', 'codex', 'antigravity', 'generic']         ;
                                  
 function tool(value        )       {
@@ -282,7 +284,7 @@ const ROUTER_RULE = 'A SPEC-100 router hook selects a model and an effort level 
 function managedSection(files          , agentsImport         , shared = false, router = false)         {
   const folders = files.filter(name => /^[^/]+\/$/.test(name) && !excluded(name)).sort().map(name => `- \`${label(name)}\``).join('\n');
   const context = shared
-    ? 'Before work, read harness/project-context.md, harness/learnings.md, and all three files in harness/rules/. Follow ASD-STE100 Simplified Technical English in applicable technical communication.\nUse the spec100-research, spec100-plan, spec100-iterate, spec100-implement, and spec100-check skills. If this tool does not discover skills, read the matching canonical file in harness/skills/.\nRequired independent agents, verification, risk, approval, and UAT gates still apply. Missing capabilities block implementation. Use one active writer per project.\n'
+    ? 'Before work, read harness/project-context.md, harness/learnings.md, and all three files in harness/rules/. Follow ASD-STE100 Simplified Technical English in applicable technical communication.\nUse the spec100-research, spec100-plan, spec100-iterate, spec100-implement, and spec100-check skills. If this tool does not discover skills, read the matching canonical file in harness/skills/.\nFor release notes, use the release-notes-project and release-notes-stakeholder skills in .agents/skills/.\nRequired independent agents, verification, risk, approval, and UAT gates still apply. Missing capabilities block implementation. Use one active writer per project.\n'
     : `${agentsImport ? '\n@AGENTS.md\n' : ''}\n@harness/project-context.md\n@harness/learnings.md\n@harness/rules/STE-100.md\n@harness/rules/YAGNI-KISS.md\n@harness/rules/atomic-operations.md\n\nUse /spec100:research, /spec100:plan, /spec100:iterate, /spec100:implement, and /spec100:check.\n${router ? ROUTER_RULE : ''}`;
   return `${BEGIN}\n# SPEC-100 agent harness\n\n${context}\nCanonical skills: harness/skills/. Topic artifacts: harness/thoughts/.\n\n## Project layout\n\nFind project files in ${INDEX} before you search. Read that file on demand; do not import it.\n\nTop-level folders:\n${folders}\n${END}`;
 }
@@ -407,7 +409,7 @@ function setup(root        , draft     , dryRun = false, requested         = [],
         assert(old?.links[relative] && path.normalize(fs.readlinkSync(file)) === path.normalize(old.links[relative]), `Unmanaged or modified link collision: ${relative}`);
       } else {
         safe(root, relative);
-        const bootstrap = /^\.(?:agents|claude)\/skills\/spec100-setup\//.test(relative) && readText(file) === eol(content);
+        const bootstrap = /^\.(?:agents|claude)\/skills\/(?:spec100-setup|release-notes-(?:project|stakeholder))\//.test(relative) && readText(file) === eol(content);
         assert(old?.owned.includes(relative) || merged.has(relative) || bootstrap, `Unmanaged file collision: ${relative}`);
         assert(preserve || !old?.generated?.[relative] || textDigest(file) === old.generated[relative], `Modified generated file: ${relative}. Preserve its changes before setup.`);
         if (preserve) {
@@ -460,6 +462,10 @@ function setup(root        , draft     , dryRun = false, requested         = [],
     put(destination + 'SKILL.md', fs.readFileSync(path.join(templates, 'setup.md'), 'utf8'), false, true);
     put(destination + 'scripts/spec100.cjs', fs.readFileSync(__filename, 'utf8'), false, true);
     copyTemplates(templates, '', destination + 'assets/templates/', true);
+    for (const name of NOTES) {
+      put(`${dir}/skills/${name}/SKILL.md`, fs.readFileSync(path.join(templates, 'release-notes', name + '.md'), 'utf8'), false, true);
+      put(`${dir}/skills/${name}/scripts/release-notes.cjs`, fs.readFileSync(path.join(templates, 'release-notes', 'release-notes.cjs'), 'utf8'), false, true);
+    }
   }
   const manifest           = { version: VERSION, schema: 2, tools, software: draft.software, agents: roles, owned: [], links, generated, ...(router ? { router } : {}) };
   for (const name of ['harness/.runtime/manifest.json', INDEX, ...rootFiles(manifest)]) owned.add(name);
@@ -474,7 +480,7 @@ function setup(root        , draft     , dryRun = false, requested         = [],
   put(INDEX, indexFile([...files].sort()));
   for (const name of rootFiles(manifest)) put(name, rootContent(root, name, [...files].sort(), manifest));
   if (!dryRun) transaction(root, entries, ['harness/thoughts']);
-  return { version: VERSION, dryRun, tools, router, migrations, files: entries.map(e => e.path), commands: { claude: tools.includes('claude') ? ['setup', 'check', ...SKILLS].map(name => '/spec100:' + name) : [], portable: shared ? ['setup', 'check', ...SKILLS].map(name => 'spec100-' + name) : [] }, activation: 'unverified: inspect native hooks and agents in the active tool before implementation' };
+  return { version: VERSION, dryRun, tools, router, migrations, files: entries.map(e => e.path), commands: { claude: tools.includes('claude') ? [...['setup', 'check', ...SKILLS].map(name => '/spec100:' + name), ...NOTES.map(name => '/' + name)] : [], portable: shared ? [...['setup', 'check', ...SKILLS].map(name => 'spec100-' + name), ...NOTES] : [] }, activation: 'unverified: inspect native hooks and agents in the active tool before implementation' };
 }
 
                                                                                                                                                     

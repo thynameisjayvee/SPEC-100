@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const runtime = path.join(repo, 'plugins/spec100/runtime/spec100.cjs');
 const roles = ['implementer', 'code-reviewer', 'security-reviewer', 'verifier', 'risk-classifier'];
+const notes = ['release-notes-project', 'release-notes-stakeholder'];
 const draft = (software = true) => ({ software, context: {
   domain: 'Example library', problem: 'Validate values', audience: 'Library consumers', architecture: 'A small module', tooling: 'Node.js', verification: 'node --test', sources: [], uncertainties: 'Unknown deployment environment'
 }, agents: Object.fromEntries((software ? roles : ['implementer']).map(role => [role, `Inspect this validation library as its ${role}; preserve the documented API.`])) });
@@ -513,11 +514,67 @@ for (const host of ['claude', 'codex', 'antigravity', 'generic']) {
       assert.equal(fs.lstatSync(path.join(f.root, file)).isSymbolicLink(), false);
       assert.doesNotMatch(f.read(file), /disable-model-invocation|allow_implicit_invocation: false/);
     }
+    for (const name of notes) {
+      for (const [installed, portable] of [[`${dir}/skills/${name}/SKILL.md`, `skills/${name}/SKILL.md`], [`${dir}/skills/${name}/scripts/release-notes.cjs`, `skills/${name}/scripts/release-notes.cjs`]]) {
+        assert.equal(fs.lstatSync(path.join(f.root, installed)).isSymbolicLink(), false);
+        assert.deepEqual(fs.readFileSync(path.join(f.root, installed)), fs.readFileSync(path.join(repo, portable)), installed);
+      }
+    }
+    if (host !== 'claude') assert.match(f.read('AGENTS.md'), /release-notes-project and release-notes-stakeholder skills in \.agents\/skills\//);
     if (host === 'codex') assert.match(f.read('.codex/agents/spec100-verifier.toml'), /shell_tool = false/);
     if (host === 'antigravity') assert.match(f.read('.agents/agents/spec100-verifier.md'), /subagent: true/);
     assert.match(f.read('harness/rules/STE-100.md'), /ASD-STE100 Simplified Technical English/);
   });
 }
+
+test('installed release notes skills run in the project and check reports a modified copy', t => {
+  const f = fixture(t);
+  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', HOME: f.base, GIT_AUTHOR_NAME: 'Ana Cruz', GIT_AUTHOR_EMAIL: 'ana@example.com', GIT_COMMITTER_NAME: 'Ana Cruz', GIT_COMMITTER_EMAIL: 'ana@example.com' };
+  for (const args of [['init', '-q', '-b', 'main'], ['add', '.'], ['commit', '-q', '-m', 'Install the harness']]) {
+    const r = spawnSync('git', ['-C', f.root, ...args], { encoding: 'utf8', env });
+    assert.equal(r.status, 0, r.stderr);
+  }
+  for (const name of notes) {
+    const kind = name.replace('release-notes-', '');
+    const r = spawnSync(process.execPath, [path.join(f.root, `.claude/skills/${name}/scripts/release-notes.cjs`), 'collect', '--kind', kind, '--json', path.join(f.base, `${kind}.json`), '--repo', f.root, '--ref', 'main'], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(JSON.parse(r.stdout).commits.length, 1);
+  }
+  assert.ok(f.setup().commands.claude.includes('/release-notes-stakeholder'));
+  const relative = '.claude/skills/release-notes-stakeholder/SKILL.md';
+  f.write(relative, f.read(relative) + '\nChanged by hand.\n');
+  assert.equal(f.cli(['check'], 1).checks.find(c => c.id === 'integration.file.' + relative).ok, false);
+});
+
+test('setup adopts an identical release notes copy and refuses a different copy', t => {
+  const f = fixture(t, false);
+  f.write('.gitignore', '.agents/\n.codex/\n');
+  fs.cpSync(path.join(repo, 'skills/release-notes-project'), path.join(f.root, '.agents/skills/release-notes-project'), { recursive: true });
+  f.write('.agents/skills/release-notes-stakeholder/SKILL.md', '# User release notes\n');
+  const result = f.cli(['setup', '--draft', f.input(draft()), '--tool', 'codex'], 2);
+  assert.match(JSON.stringify(result), /Unmanaged file collision: \.agents\/skills\/release-notes-stakeholder\/SKILL\.md/);
+  assert.equal(f.read('.agents/skills/release-notes-stakeholder/SKILL.md'), '# User release notes\n');
+  assert.equal(fs.existsSync(path.join(f.root, 'harness')), false);
+  fs.rmSync(path.join(f.root, '.agents/skills/release-notes-stakeholder'), { recursive: true });
+  f.setup(draft(), ['--tool', 'codex']);
+  assert.equal(f.cli(['check'], 0, undefined, true).ok, true);
+});
+
+test('setup adds the release notes skills to a 2.3.1 installation', t => {
+  const f = fixture(t);
+  f.write('harness/skills/plan.md', f.read('harness/skills/plan.md') + '\n# Customized plan\n');
+  const manifest = JSON.parse(f.read('harness/.runtime/manifest.json'));
+  const removed = name => notes.some(note => name.startsWith(`.claude/skills/${note}/`));
+  manifest.version = '2.3.1';
+  manifest.owned = manifest.owned.filter(name => !removed(name));
+  manifest.generated = Object.fromEntries(Object.entries(manifest.generated).filter(([name]) => !removed(name)));
+  f.write('harness/.runtime/manifest.json', JSON.stringify(manifest));
+  for (const name of notes) fs.rmSync(path.join(f.root, '.claude/skills', name), { recursive: true });
+  const result = f.setup();
+  for (const name of notes) assert.ok(result.files.includes(`.claude/skills/${name}/scripts/release-notes.cjs`), name);
+  assert.match(f.read('harness/skills/plan.md'), /# Customized plan\n$/);
+  assert.equal(f.cli(['check'], 0, undefined, true).ok, true);
+});
 
 test('tools are additive and share canonical customizations without changing user configuration', t => {
   const f = fixture(t, false);
@@ -827,7 +884,7 @@ test('setup upgrades a 2.0.0 installation and replaces launchers for another pat
   f.setup();
   const upgraded = JSON.parse(f.read('.claude/settings.json'));
   for (const event of ['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop']) assert.equal(upgraded.hooks[event].length, 1, event);
-  assert.equal(JSON.parse(f.read('harness/.runtime/manifest.json')).version, '2.3.1');
+  assert.equal(JSON.parse(f.read('harness/.runtime/manifest.json')).version, '2.4.0');
   assert.equal(f.cli(['check']).ok, true);
 });
 

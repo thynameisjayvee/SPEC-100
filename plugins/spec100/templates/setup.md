@@ -16,4 +16,6 @@ Use the active coding session to inspect the project and prepare its harness. Do
 
 Claude retains `/spec100:research`, `/spec100:plan`, `/spec100:iterate`, `/spec100:implement`, and `/spec100:check`. Codex uses `$spec100-research`, `$spec100-plan`, `$spec100-iterate`, `$spec100-implement`, and `$spec100-check`. Antigravity can select the same skills, including by slash command where supported. Other tools can read the canonical files under `harness/skills/`.
 
+Setup also installs the `release-notes-project` and `release-notes-stakeholder` skills in each native skill folder (`.claude/skills/` or `.agents/skills/`). Each folder keeps its `scripts/release-notes.cjs`.
+
 Keep automatic skill selection enabled. Quote actual paths as shell arguments. Never insert free-form user text into shell commands. Preserve customized rules, context, skills, role instructions, learnings, plans, and evidence. Use one active writer per project. Setup does not authorize high-risk implementation, PR creation, merge, or deployment.
