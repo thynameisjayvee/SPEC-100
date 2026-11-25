@@ -2,9 +2,9 @@ const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
 const { createHash, randomUUID }: typeof import('node:crypto') = require('node:crypto');
 
-const VERSION = '2.3.0';
+const VERSION = '2.3.1';
 // Older manifests stay readable after a version increase.
-const SUPPORTED_VERSIONS = ['1.0.0', '2.0.0', '2.1.0', '2.2.0', VERSION];
+const SUPPORTED_VERSIONS = ['1.0.0', '2.0.0', '2.1.0', '2.2.0', '2.3.0', VERSION];
 const BEGIN = '<!-- spec100:begin -->';
 const END = '<!-- spec100:end -->';
 const INDEX = 'harness/project-index.md';
@@ -856,6 +856,37 @@ function projectPath(root: string, file: string): string {
   const relative = process.platform === 'darwin' ? path.relative(root.toLowerCase(), target.toLowerCase()) : path.relative(root, target);
   return relative.split(path.sep).join('/');
 }
+// Claude Code sends the session scratchpad as <tmp>/claude-<uid>/<project>/<session>/scratchpad.
+// The project tmp folder is two levels above it. If the layout differs, only the scratchpad itself counts.
+function projectTmp(input: any): string | undefined {
+  const scratchpad = input.scratchpad_dir;
+  if (typeof scratchpad !== 'string' || !path.isAbsolute(scratchpad)) return undefined;
+  const session = path.dirname(scratchpad);
+  return canonical(typeof input.session_id === 'string' && input.session_id && path.basename(session) === input.session_id ? path.dirname(session) : scratchpad);
+}
+// An rm whose targets are all inside the project tmp folder is not a SPEC-100 risk. Accept only the plain form
+// "rm [flags] path...". Any shell feature that can add or hide a target makes the command risky again.
+function tmpRemoval(command: string, base: string, input: any): boolean {
+  const tmp = projectTmp(input);
+  // zsh expands a word that starts with "=" to a program path, and "^" is a glob with extendedglob.
+  if (!tmp || /[;&|`$()<>*?[\]{}~"'\\#!=^\r\n]/.test(command)) return false;
+  const [name, ...words] = command.trim().split(/\s+/);
+  if (name !== 'rm') return false;
+  const paths: string[] = [];
+  let options = true;
+  for (const word of words) {
+    if (options && word === '--') options = false;
+    else if (options && word.startsWith('-')) { if (!/^(?:-[rRfvd]+|--recursive|--force)$/.test(word)) return false; }
+    // BSD rm (macOS) stops option parsing at the first path. Every later word is a path, also "--" or "-rf".
+    else { paths.push(word); options = false; }
+  }
+  // The kernel applies ".." after it follows a link. path.resolve removes ".." by text. The two can differ, so refuse ".." entirely.
+  return paths.length > 0 && paths.every(file => {
+    if (file.split(/[\\/]/).includes('..')) return false;
+    const relative = projectPath(tmp, path.resolve(base, file));
+    return relative !== '' && relative !== '..' && !relative.startsWith('../') && !path.isAbsolute(relative);
+  });
+}
 function capabilityUnavailable(root: string, run: Run): boolean {
   const data = run.evidence.capabilities?.data;
   return !!data && (data.hooksActive !== true || installed(root).software && data.independentAgents !== true);
@@ -947,7 +978,7 @@ function hook(root: string, event: string, input: any, host: Tool = 'claude'): a
     }
     const targets = files.map(file => projectPath(root, path.resolve(base, file)));
     if (targets.some(relative => PROTECTED_PATH.test(relative))) return decision('deny', 'Use the SPEC-100 runtime; direct changes to learning history, run records, and runtime records are prohibited.');
-    const dangerous = RISKY_COMMANDS.some(pattern => pattern.test(command)) || targets.some(relative => HIGH_RISK_PATH.test(relative) || HOOK_CONFIG.test(relative));
+    const dangerous = RISKY_COMMANDS.some(pattern => pattern.test(command)) && !(host === 'claude' && tmpRemoval(command, base, input)) || targets.some(relative => HIGH_RISK_PATH.test(relative) || HOOK_CONFIG.test(relative));
     if (dangerous) {
       const runs = activeRuns(root, session, host);
       if (!runs.length || runs.some(run => !current(root, run, run.evidence.approval))) return decision('ask', 'This action is high risk under SPEC-100. Obtain explicit approval in chat and record it before proceeding.');
