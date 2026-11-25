@@ -60,9 +60,9 @@ harness/
 
 | Tool | Root instructions | Skills | Agents and hooks |
 |---|---|---|---|
-| Claude Code | Managed `CLAUDE.md` section | Plugin commands and `.claude/skills/spec100-*` | `.claude/agents/`, `.claude/settings.json` |
-| Codex | Managed `AGENTS.md` section | `.agents/skills/spec100-*` | `.codex/agents/*.toml`, `.codex/hooks.json` |
-| Antigravity | Same managed `AGENTS.md` section | Same `.agents/skills/spec100-*` | `.agents/agents/*.md`, `.agents/hooks.json` |
+| Claude Code | Managed `CLAUDE.md` section | Plugin commands, `.claude/skills/spec100-*`, and `.claude/skills/release-notes-*` | `.claude/agents/`, `.claude/settings.json` |
+| Codex | Managed `AGENTS.md` section | `.agents/skills/spec100-*` and `.agents/skills/release-notes-*` | `.codex/agents/*.toml`, `.codex/hooks.json` |
+| Antigravity | Same managed `AGENTS.md` section | Same `.agents/skills/` folders | `.agents/agents/*.md`, `.agents/hooks.json` |
 | Generic | Managed `AGENTS.md` section | Portable skills or explicit canonical file reads | No native agent/hook adapter |
 
 Codex uses `$spec100-research`, `$spec100-plan`, `$spec100-iterate`, `$spec100-implement`, and `$spec100-check`. Antigravity uses the same skill names, with slash invocation where supported. Keep automatic skill selection enabled.
@@ -117,14 +117,14 @@ Limits:
 
 ## Release notes skills
 
-Two skills write release notes from the Git history of a project. The Claude plugin includes both. They are separate from the harness and need no setup.
+Two skills write release notes from the Git history of a project. The Claude plugin includes both. Setup also installs both skills in the project, next to the other harness skills.
 
 | Skill | Audience | Source | HTML filters |
 |---|---|---|---|
 | [`release-notes-project`](skills/release-notes-project) | End users and customers | The production branch or tag | Date |
 | [`release-notes-stakeholder`](skills/release-notes-stakeholder) | Managers, clients, and product owners | A branch that the user selects | Date and contributor |
 
-After you install the `spec100` plugin, ask for release notes, or run `/spec100:release-notes-project` or `/spec100:release-notes-stakeholder`. Other tools can use the portable folders under `skills/`. Install a folder the same way as `spec100-setup`, and keep its `scripts/` folder.
+In a project with the harness, ask for release notes, or run `/release-notes-project` or `/release-notes-stakeholder`. Setup writes the skills to `.claude/skills/` for Claude and to `.agents/skills/` for the other tools. To add them to a project that has an older harness, run the setup skill again. The Claude plugin also gives `/spec100:release-notes-project` and `/spec100:release-notes-stakeholder`. Without the harness, install a portable folder under `skills/` the same way as `spec100-setup`, and keep its `scripts/` folder. Setup adopts an identical copy. It refuses a different copy, so remove or rename that copy first.
 
 Each skill writes a JSON file and one offline HTML page. The defaults are `release-notes/project.*` and `release-notes/stakeholder.*`. The page shows the changes from new to old. The text obeys ASD-STE100 Simplified Technical English.
 

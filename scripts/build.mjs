@@ -23,6 +23,12 @@ for (const skill of ['skills/release-notes-project', 'skills/release-notes-stake
   if (!text.includes(marker)) throw new Error(`${skill}/SKILL.md lost the script path sentence.`);
   await writeFile(`${target}/SKILL.md`, text.replace(marker, 'is `${CLAUDE_PLUGIN_ROOT}/skills/' + name + '/scripts/release-notes.cjs`.'));
 }
+// Setup installs the portable release notes skills into each project native skill folder.
+await mkdir(`${templates}/release-notes`, { recursive: true });
+await writeFile(`${templates}/release-notes/release-notes.cjs`, notes);
+for (const name of ['release-notes-project', 'release-notes-stakeholder']) {
+  await writeFile(`${templates}/release-notes/${name}.md`, (await readFile(`skills/${name}/SKILL.md`, 'utf8')).replace(/\r\n/g, '\n'));
+}
 const setup = (await readFile(`${portable}/SKILL.md`, 'utf8')).replace(/\r\n/g, '\n');
 await writeFile(`${templates}/setup.md`, setup);
 await cp(templates, 'plugins/spec100/templates', { recursive: true });
