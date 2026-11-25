@@ -879,12 +879,15 @@ test('common destructive command forms ask and safe neighbors do not', t => {
 test('rm inside the project tmp folder does not ask and other targets still ask', t => {
   const f = fixture(t);
   // The Claude Code layout: <tmp>/claude-<uid>/<project>/<session>/scratchpad.
-  const tmp = path.join(f.base, 'claude-501', '-project-space');
-  const scratch = path.join(tmp, 's', 'scratchpad');
-  fs.mkdirSync(scratch, { recursive: true });
-  try { fs.symlinkSync(f.root, path.join(scratch, 'link'), 'dir'); } catch (error) { if (error.code !== 'EPERM') throw error; }
+  // On Windows, the commands use the long path and forward slashes. Git Bash reads "\" as an escape,
+  // and the "~" of a short name such as RUNNER~1 is a zsh glob, so the hook correctly refuses both.
+  const scratchDir = path.join(fs.realpathSync.native(f.base), 'claude-501', '-project-space', 's', 'scratchpad');
+  const scratch = scratchDir.split(path.sep).join('/');
+  const tmp = path.posix.dirname(path.posix.dirname(scratch));
+  fs.mkdirSync(scratchDir, { recursive: true });
+  try { fs.symlinkSync(f.root, path.join(scratchDir, 'link'), 'dir'); } catch (error) { if (error.code !== 'EPERM') throw error; }
   const pre = (command, extra = {}, host = 'claude') => f.cli(['hook', '--tool', host, '--event', 'PreToolUse'], 0,
-    { session_id: 's', scratchpad_dir: scratch, tool_name: 'Bash', tool_input: { command }, ...extra }).hookSpecificOutput?.permissionDecision;
+    { session_id: 's', scratchpad_dir: scratchDir, tool_name: 'Bash', tool_input: { command }, ...extra }).hookSpecificOutput?.permissionDecision;
   for (const command of [`rm -rf ${scratch}/x`, `rm -r -f ${scratch}/a ${scratch}/b`, `rm --recursive --force ${tmp}/other-session/y`, `rm -rf -- ${scratch}/x`, `rm -fv ${scratch}/x`])
     assert.equal(pre(command), undefined, command);
   assert.equal(pre('rm -rf x', { cwd: scratch }), undefined);
@@ -905,7 +908,7 @@ test('rm inside the project tmp folder does not ask and other targets still ask'
   assert.equal(pre(`rm -rf ${tmp}/other-session/y`, { session_id: 'other' }), 'ask');
   // Other hosts do not send scratchpad_dir. Codex denies a risky command instead of asking.
   const codex = fixture(t, false); codex.setup(draft(), ['--tool', 'codex']);
-  assert.equal(codex.cli(['hook', '--tool', 'codex', '--event', 'PreToolUse'], 0, { session_id: 's', scratchpad_dir: scratch, tool_name: 'Bash', tool_input: { command: `rm -rf ${scratch}/x` } }).hookSpecificOutput?.permissionDecision, 'deny');
+  assert.equal(codex.cli(['hook', '--tool', 'codex', '--event', 'PreToolUse'], 0, { session_id: 's', scratchpad_dir: scratchDir, tool_name: 'Bash', tool_input: { command: `rm -rf ${scratch}/x` } }).hookSpecificOutput?.permissionDecision, 'deny');
 });
 
 test('CRLF checkouts keep structure checks, setup, and recorded evidence valid', t => {
