@@ -3,9 +3,9 @@ const fs                           = require('node:fs');
 const path                             = require('node:path');
 const { createHash, randomUUID }                               = require('node:crypto');
 
-const VERSION = '2.4.0';
+const VERSION = '2.5.0';
 // Older manifests stay readable after a version increase.
-const SUPPORTED_VERSIONS = ['1.0.0', '2.0.0', '2.1.0', '2.2.0', '2.3.0', '2.3.1', VERSION];
+const SUPPORTED_VERSIONS = ['1.0.0', '2.0.0', '2.1.0', '2.2.0', '2.3.0', '2.3.1', '2.4.0', VERSION];
 const BEGIN = '<!-- spec100:begin -->';
 const END = '<!-- spec100:end -->';
 const INDEX = 'harness/project-index.md';
@@ -484,9 +484,20 @@ function setup(root        , draft     , dryRun = false, requested         = [],
 }
 
                                                                                                                                                     
-                                                                                                                                    
+                                                         
+// accepted: confirmed low findings of this round that the user accepted as follow-ups at the review limit.
+                                                                                                                                                                                                   
                                                                                  
-                                                                                                                                                                                                                                                                                                                                                      
+// extensions: extra review rounds that the user approved after the default limit was used.
+                                                                                                                                                                                                                                                                                                                                                                                                                     
+// The default review limit. The user can approve more rounds with `workflow extend`.
+const REVIEW_ROUNDS = 3;
+function reviewLimit(run     )         { return REVIEW_ROUNDS + (run.extensions ?? []).reduce((sum, extension) => sum + extension.rounds, 0); }
+// A finding is cleared when both verifiers dismiss it, or when the user accepted it as a follow-up.
+function cleared(round        , finding         )          {
+  return (finding.votes.length === 2 && finding.votes.every(vote => vote.verdict === 'dismiss')) || !!round.accepted?.findings.includes(finding.id);
+}
+function roundClean(round                    )          { return !!round && round.reviewers.every(reviewer => reviewer.findings.every(finding => cleared(round, finding))); }
 const HIGH_RISK_PATH = /(?:^|\/)(?:auth(?:entication|orization)?|security|migrations?|production|prod|terraform|infra(?:structure)?)(?:[/.\-_]|$)|(?:^|\/)\.github\/workflows\//i;
 // One CLI invocation sees a single code state; its own writes affect excluded evidence/index files.
 const snapshotCache = new Map                                ();
@@ -582,8 +593,8 @@ function runChecks(root        , run     )                                      
     add('workflow.preflight', !!run.evidence.preflight && run.evidence.preflight.fingerprint === digest(JSON.stringify(run.baseline)) && run.evidence.preflight.data.passed === true, 'Record successful pre-implementation baseline verification.');
     add('workflow.verification', current(root, run, run.evidence.verification) && run.evidence.verification .data.passed === true, 'Run verification commands and record successful results for the current changes.');
     const last = run.rounds.at(-1);
-    const clean = !!last && last.reviewers.every(reviewer => reviewer.findings.every(finding => finding.votes.length === 2 && finding.votes.every(vote => vote.verdict === 'dismiss')));
-    add('workflow.review', run.rounds.length > 0 && run.rounds.length <= 3 && current(root, run, last) && clean, run.rounds.length >= 3 ? 'Review cap reached; provide a blocked handoff for unresolved findings.' : 'Complete independent code/security review and resolve or unanimously dismiss all findings.');
+    const limit = reviewLimit(run);
+    add('workflow.review', run.rounds.length > 0 && run.rounds.length <= limit && current(root, run, last) && roundClean(last), run.rounds.length >= limit ? 'Review limit reached. Ask the user to approve more rounds (workflow extend) or to accept confirmed low findings as follow-ups (workflow accept); otherwise provide a blocked handoff.' : 'Complete independent code/security review and resolve or unanimously dismiss all findings.');
     const uat = run.evidence.uat;
     let validUat = current(root, run, uat);
     if (validUat && uat .data.applicable) validUat = uat .data.screenshots.every((image     ) => {
@@ -633,7 +644,7 @@ function validateReview(data     )       {
 }
 function record(root        , topic        , kind        , data     )      {
   const run = loadRun(root, topic);
-  assert(run.status !== 'blocked', 'Run is blocked; the three-round review cap cannot be reset.');
+  assert(run.status !== 'blocked', 'Run is blocked at the review limit. Ask the user to approve more rounds (workflow extend) or to accept confirmed low findings (workflow accept). The review count cannot be reset.');
   assert(data && typeof data === 'object' && !Array.isArray(data), 'Evidence must be a JSON object');
   if (kind === 'capabilities') {
     assert(tool(data.tool) === (run.tool ?? 'claude'), 'Capability evidence must identify the run tool');
@@ -652,10 +663,10 @@ function record(root        , topic        , kind        , data     )      {
     assert(!data.passed || data.commands.every((cmd     ) => cmd.exitCode === 0), 'Failed commands cannot be recorded as passing');
     if (kind === 'preflight') assert(run.rounds.length === 0 && changedFiles(root, run).length === 0, 'Preflight must precede implementation changes and reviews');
   } else if (kind === 'review') {
-    assert(run.rounds.length < 3, 'Maximum of three review rounds reached');
+    assert(run.rounds.length < reviewLimit(run), `The review limit of ${reviewLimit(run)} rounds is reached. Ask the user to approve more rounds with workflow extend.`);
     validateReview(data);
     run.rounds.push({ fingerprint: fingerprint(root), planHash: planHash(root, run), at: new Date().toISOString(), reviewers: data.reviewers });
-    if (run.rounds.length === 3 && data.reviewers.some((r     ) => r.findings.some((f     ) => f.votes.some((v     ) => v.verdict !== 'dismiss')))) run.status = 'blocked';
+    if (run.rounds.length === reviewLimit(run) && !roundClean(run.rounds.at(-1))) run.status = 'blocked';
   } else if (kind === 'uat') {
     assert(typeof data.applicable === 'boolean', 'UAT needs applicable: true or false');
     if (!data.applicable) text(data.reason, 'explicit UAT inapplicability reason');
@@ -692,6 +703,43 @@ function approve(root        , topic        , data     )      {
   saveRun(root, run);
   return run;
 }
+function approval(data     , label        )           {
+  return { userResponse: text(data?.userResponse, 'explicit human approval response'), reason: text(data?.reason, label) };
+}
+// Adds review rounds after the limit is used. The user decides in chat; the hook asks for permission.
+function extend(root        , topic        , data     )      {
+  const run = loadRun(root, topic);
+  assert(run.status !== 'complete', 'A completed run cannot be extended');
+  const decided = approval(data, 'extension reason');
+  const rounds = data.rounds ?? 1;
+  assert(Number.isInteger(rounds) && rounds >= 1 && rounds <= 3, 'An extension adds 1 to 3 review rounds');
+  assert(run.rounds.length >= reviewLimit(run), 'Extend the review limit only after all allowed rounds are used');
+  (run.extensions ??= []).push({ rounds, at: new Date().toISOString(), data: decided });
+  if (run.status === 'blocked') run.status = 'active';
+  saveRun(root, run);
+  return run;
+}
+// Accepts confirmed low findings of the last round as recorded follow-ups. Only at the review limit.
+function accept(root        , topic        , data     )      {
+  const run = loadRun(root, topic);
+  assert(run.status !== 'complete', 'A completed run cannot accept findings');
+  const decided = approval(data, 'acceptance reason');
+  assert(Array.isArray(data.findings) && data.findings.length > 0, 'Name the confirmed findings to accept');
+  assert(run.rounds.length >= reviewLimit(run), 'Accept findings only at the review limit; fix them in another round first');
+  const last = run.rounds.at(-1) ;
+  assert(!last.accepted, 'Findings of this round were already accepted; accept all of them in one call');
+  const findings = last.reviewers.flatMap(reviewer => reviewer.findings);
+  for (const id of data.findings) {
+    const finding = findings.find(item => item.id === id);
+    assert(finding, `Finding ${id} is not in the last review round`);
+    assert(finding.severity === 'low', `Only low findings can be accepted; ${id} is ${finding.severity}`);
+    assert(!cleared(last, finding), `Finding ${id} is already cleared`);
+  }
+  last.accepted = { findings: [...new Set        (data.findings)], at: new Date().toISOString(), data: decided };
+  if (run.status === 'blocked' && roundClean(last)) run.status = 'active';
+  saveRun(root, run);
+  return run;
+}
 function workflowStatus(root        , topic        , finalize = false)      {
   const run = loadRun(root, topic);
   const checks = runChecks(root, run);
@@ -704,10 +752,11 @@ function workflowStatus(root        , topic        , finalize = false)      {
   }
   const reviewFailed = checks.find(check => check.id === 'workflow.review')?.ok === false;
   const unavailable = run.evidence.capabilities && (run.evidence.capabilities.data.hooksActive !== true || installed(root).software && run.evidence.capabilities.data.independentAgents !== true);
-  const status = !ok && (run.rounds.length >= 3 && reviewFailed || unavailable) ? 'blocked' : !ok && run.status === 'complete' ? 'stale' : run.status;
+  const status = !ok && (run.rounds.length >= reviewLimit(run) && reviewFailed || unavailable) ? 'blocked' : !ok && run.status === 'complete' ? 'stale' : run.status;
   return { topic, status, risk: riskLevel(root, run), rounds: run.rounds.length, ok, checks, changedFiles: changedFiles(root, run) };
 }
-function evidenceHash(run     )         { return digest(JSON.stringify({ rounds: run.rounds, evidence: run.evidence, planHash: run.planHash })); }
+// Runs without extensions keep the same hash as before extensions existed.
+function evidenceHash(run     )         { return digest(JSON.stringify({ rounds: run.rounds, evidence: run.evidence, planHash: run.planHash, ...(run.extensions ? { extensions: run.extensions } : {}) })); }
 function allRuns(root        )        {
   // A directory read is enough. The runtime creates runs only in topic folders with valid names.
   const dir = safe(root, 'harness/thoughts');
@@ -991,14 +1040,15 @@ function hook(root        , event        , input     , host       = 'claude')   
       if (!runs.length || runs.some(run => !current(root, run, run.evidence.approval))) return decision('ask', 'This action is high risk under SPEC-100. Obtain explicit approval in chat and record it before proceeding.');
     }
     // Exempt only a standalone call to this project's installed runtime. Mentioning an approval in a compound command grants nothing.
-    const invocation = /[;&|\r\n`$<>]/.test(command) ? null : command.match(/^node(?:\.exe)?\s+("[^"\r\n]+"|'[^'\r\n]+'|[^\s"']+)\s+(workflow\s+(?:approve|record|status|check)|artifact|check|index|learn)\b/);
+    const invocation = /[;&|\r\n`$<>]/.test(command) ? null : command.match(/^node(?:\.exe)?\s+("[^"\r\n]+"|'[^'\r\n]+'|[^\s"']+)\s+(workflow\s+(?:approve|extend|accept|record|status|check)|artifact|check|index|learn)\b/);
     const runtimeAction = invocation && projectPath(root, path.resolve(base, invocation[1] .replace(/^(["'])(.*)\1$/, '$2'))).toLowerCase() === 'harness/.runtime/spec100.cjs' ? invocation[2] .replace(/\s+/g, ' ') : undefined;
-    if (runtimeAction === 'workflow approve') {
+    // Approve, extend (more review rounds), and accept (low findings as follow-ups) all record a human decision.
+    if (runtimeAction === 'workflow approve' || runtimeAction === 'workflow extend' || runtimeAction === 'workflow accept') {
       // Codex cannot request permission from a PreToolUse hook. The approval record is cooperative evidence of a real chat response.
-      return host === 'codex' ? { hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: 'Record only the actual explicit human response from this conversation. Do not approve on the user\'s behalf.' } } : decision('ask', 'SPEC-100 requires explicit human approval for this plan and change fingerprint.');
+      return host === 'codex' ? { hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: 'Record only the actual explicit human response from this conversation. Do not decide on the user\'s behalf.' } } : decision('ask', runtimeAction === 'workflow approve' ? 'SPEC-100 requires explicit human approval for this plan and change fingerprint.' : 'SPEC-100 requires the user\'s explicit decision in chat to extend the review limit or accept findings.');
     }
-    // Any other command form that can reach the approval action needs the same human decision.
-    if (/spec100/i.test(command) && /\bworkflow\b[\s\S]*\bapprove\b/i.test(command)) return decision('ask', 'Run workflow approve only as a standalone call to harness/.runtime/spec100.cjs. SPEC-100 requires explicit human approval.');
+    // Any other command form that can reach a human-decision action needs the same human decision.
+    if (/spec100/i.test(command) && /\bworkflow\b[\s\S]*\b(?:approve|extend|accept)\b/i.test(command)) return decision('ask', 'Run workflow approve, extend, or accept only as a standalone call to harness/.runtime/spec100.cjs. SPEC-100 requires an explicit human decision.');
     if (!runtimeAction) {
       // These gates need only evidence data and the instruction-file fingerprint, not a hash of every project file.
       // A completed run with a tool is stale whenever either gate fails, so it is included without a full check.
@@ -1013,7 +1063,7 @@ function hook(root        , event        , input     , host       = 'claude')   
   if (event === 'Stop') {
     const runs = activeRuns(root, session, host);
     if (runs.length === 0) return {};
-    const pending = runs.filter(run => run.rounds.length < 3 && !runChecks(root, run).every(check => check.ok));
+    const pending = runs.filter(run => run.rounds.length < reviewLimit(run) && !runChecks(root, run).every(check => check.ok));
     if (pending.length) {
       const reason = `SPEC-100 gates remain incomplete for ${pending.map(run => run.topic).join(', ')}. Continue verification or explain a blocked handoff. Do not repeat a blocked action.`;
       return host === 'antigravity' ? { decision: 'continue', reason } : { decision: 'block', reason };
@@ -1104,8 +1154,10 @@ function main(argv           = process.argv.slice(2))       {
     if (action === 'start') result = workflowStart(root, topic, values.plan, values.session, selected[0]);
     else if (action === 'record') result = record(root, topic, required(values.kind, '--kind'), readJSON(path.resolve(required(values.file, '--file'))));
     else if (action === 'approve') result = approve(root, topic, readJSON(path.resolve(required(values.file, '--file'))));
+    else if (action === 'extend') result = extend(root, topic, readJSON(path.resolve(required(values.file, '--file'))));
+    else if (action === 'accept') result = accept(root, topic, readJSON(path.resolve(required(values.file, '--file'))));
     else if (action === 'status' || action === 'check' || action === 'finish') { result = workflowStatus(root, topic, action === 'finish'); if (action === 'check') process.exitCode = result.ok ? 0 : 1; }
-    else throw new Error('Workflow action must be start, record, approve, status, check, or finish');
+    else throw new Error('Workflow action must be start, record, approve, extend, accept, status, check, or finish');
   } else if (command === 'hook') {
     assert(selected.length <= 1, 'A hook uses one tool.');
     result = hook(root, required(values.event, '--event'), JSON.parse(fs.readFileSync(0, 'utf8')), selected[0] ?? 'claude');

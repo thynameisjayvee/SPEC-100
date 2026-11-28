@@ -16,14 +16,16 @@ These commands support SPEC-100 skills in coding tools. Run from the project roo
 node harness/.runtime/spec100.cjs workflow start --topic <topic> [--plan <relative-path>] [--session <session-id>] --tool <tool>
 node harness/.runtime/spec100.cjs workflow record --topic <topic> --kind <kind> --file <json>
 node harness/.runtime/spec100.cjs workflow approve --topic <topic> --file <json>
+node harness/.runtime/spec100.cjs workflow extend --topic <topic> --file <json>
+node harness/.runtime/spec100.cjs workflow accept --topic <topic> --file <json>
 node harness/.runtime/spec100.cjs workflow status --topic <topic>
 node harness/.runtime/spec100.cjs workflow check --topic <topic>
 node harness/.runtime/spec100.cjs workflow finish --topic <topic>
 ```
 
-Run `workflow approve` only as a standalone call to `harness/.runtime/spec100.cjs`. Hooks request a human decision for every other command form that reaches the approval action. Do not write `run.json`, `learnings.md`, or files in `harness/.runtime/` directly; hooks deny those writes. The runtime attaches a timestamp, project fingerprint, and selected-plan hash to evidence. These are cooperative gates, not signed external attestations. Faithfully record actual agent and test results. Never invoke approval without the human's explicit response. Native adapters handle supported high-risk tool calls. Claude and Antigravity can request native permission. Codex cannot emit a hook `ask` result; it denies risky actions without current recorded approval. Its agent must obtain explicit consent in chat before recording approval. Hooks do not parse every shell program or control actions outside the selected tool. Claude hooks do not ask for a plain `rm` whose targets are all inside the project tmp folder from `scratchpad_dir`. Completed runs retain an evidence hash; after a later run starts, earlier completed runs are historical and checked for modified evidence/plans instead of comparing them with later code changes.
+Run `workflow approve`, `workflow extend`, and `workflow accept` only as standalone calls to `harness/.runtime/spec100.cjs`. Hooks request a human decision for each of them and for every other command form that reaches these actions. Do not write `run.json`, `learnings.md`, or files in `harness/.runtime/` directly; hooks deny those writes. The runtime attaches a timestamp, project fingerprint, and selected-plan hash to evidence. These are cooperative gates, not signed external attestations. Faithfully record actual agent and test results. Never invoke approval without the human's explicit response. Native adapters handle supported high-risk tool calls. Claude and Antigravity can request native permission. Codex cannot emit a hook `ask` result; it denies risky actions without current recorded approval. Its agent must obtain explicit consent in chat before recording approval. Hooks do not parse every shell program or control actions outside the selected tool. Claude hooks do not ask for a plain `rm` whose targets are all inside the project tmp folder from `scratchpad_dir`. Completed runs retain an evidence hash; after a later run starts, earlier completed runs are historical and checked for modified evidence/plans instead of comparing them with later code changes.
 
-`start` captures the baseline and never replaces an existing run. `status` and `check` are read-only; `check` exits 1 for incomplete gates. `finish` records completion only when applicable gates pass. Never reset the review cap.
+`start` captures the baseline and never replaces an existing run. `status` and `check` are read-only; `check` exits 1 for incomplete gates. `finish` records completion only when applicable gates pass. Never reset the review count. The review limit is three rounds; only the user can raise it with `extend` (see "Review limit").
 
 ## Evidence inputs
 
@@ -57,7 +59,25 @@ Use actual invocation IDs or consistent labels tied to them. Log every participa
 {"reviewers":[{"id":"code-1","role":"code-reviewer","findings":[{"id":"F1","description":"Specific defect with location and evidence","severity":"medium","votes":[{"verifier":"verify-1","verdict":"confirm","reason":"Reproduction evidence"},{"verifier":"verify-2","verdict":"dismiss","reason":"Independent evidence"}]}]},{"id":"security-1","role":"security-reviewer","findings":[]}]}
 ```
 
-Severity: low, medium, high, critical. Finding IDs are unique per round. Exactly two distinct verifier identities per finding; neither can be a reviewer. A finding clears only when both dismiss it. Fix confirmed findings and assess them again in the next round. Empty findings are a clean result. Maximum three rounds including the initial review.
+Severity: low, medium, high, critical. Finding IDs are unique per round. Exactly two distinct verifier identities per finding; neither can be a reviewer. A finding clears only when both dismiss it. Fix confirmed findings and assess them again in the next round. Empty findings are a clean result. The default limit is three rounds including the initial review. When the last allowed round has a confirmed or disputed finding, the run becomes blocked until the user decides (see "Review limit").
+
+### Review limit
+
+At the limit, ask the user in chat. Record only the user's actual words.
+
+Extension input (separate `workflow extend` action; allowed only after all allowed rounds are used; adds 1 to 3 rounds, default 1; unblocks the run):
+
+```json
+{"userResponse":"The user's actual explicit decision","reason":"Why more review rounds are needed","rounds":1}
+```
+
+Acceptance input (separate `workflow accept` action; allowed only at the limit; only confirmed or disputed `low` findings of the last round; one call per round; the accepted findings become recorded follow-ups and stop blocking the review gate):
+
+```json
+{"userResponse":"The user's actual explicit decision","reason":"Why these low findings are follow-ups","findings":["F1"]}
+```
+
+Medium, high, and critical findings cannot be accepted: fix them in an extended round, or hand off blocked. Extensions and acceptances are part of the run evidence and its completion hash.
 
 `uat`:
 

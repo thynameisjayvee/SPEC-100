@@ -2,6 +2,6 @@
   "name": "spec100-marketplace",
   "owner": { "name": "SPEC-100 maintainers" },
   "plugins": [
-    { "name": "spec100", "source": "./plugins/spec100", "description": "Install and run the shared SPEC-100 project harness inside Claude Code", "version": "2.4.0" }
+    { "name": "spec100", "source": "./plugins/spec100", "description": "Install and run the shared SPEC-100 project harness inside Claude Code", "version": "2.5.0" }
   ]
 }

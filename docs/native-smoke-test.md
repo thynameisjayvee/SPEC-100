@@ -20,7 +20,7 @@ Use disposable projects. Record the OS, Node version, client version, source/run
 5. Attempt a recognizable risky action without current approval. Confirm it is intercepted before execution. Decline the native permission where offered. In Codex, confirm denial and a request for consent in chat; it must not emit the unsupported hook `ask` result.
 6. Have the human approve a concrete action. Record the actual response, then confirm the authorized action can proceed. Never approve on behalf of the user for a smoke test.
 7. Modify reviewed code, the selected plan, or integration instructions and confirm stale evidence. Confirm that index-only layout updates retain valid evidence.
-8. Confirm that unresolved findings in review round three produce a blocked handoff, without a fourth round or an endless Stop-hook loop.
+8. Confirm that unresolved findings in review round three block the run without an endless Stop-hook loop, that a fourth round is refused until `workflow extend` records the user's decision (the hook asks for permission), and that `workflow accept` clears only confirmed low findings.
 
 ## Platforms and surfaces
 

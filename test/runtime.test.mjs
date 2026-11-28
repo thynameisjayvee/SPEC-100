@@ -267,6 +267,59 @@ test('three unresolved review rounds block further execution and cannot be reset
   f.evidence('review', cleanReview(), 2); f.cli(['workflow', 'start', '--topic', 'topic'], 2);
   f.cli(['workflow', 'approve', '--topic', 'topic', '--file', f.input({ userResponse: 'Approved', reason: 'Test' })], 2);
 });
+test('the user can extend the review limit after it is used', t => {
+  const f = fixture(t); start(f);
+  const extend = (data, expected = 0) => f.cli(['workflow', 'extend', '--topic', 'topic', '--file', f.input(data)], expected);
+  const decision = { userResponse: 'Yes, run one more review round', reason: 'A confirmed finding needs a fix' };
+  f.evidence('review', findingReview(['confirm', 'confirm']));
+  extend(decision, 2); // Rounds remain; an extension is not allowed yet.
+  f.evidence('review', findingReview(['confirm', 'confirm'])); f.evidence('review', findingReview(['confirm', 'confirm']));
+  assert.equal(f.cli(['workflow', 'status', '--topic', 'topic']).status, 'blocked');
+  extend({ reason: 'No user response' }, 2);
+  extend({ ...decision, rounds: 4 }, 2);
+  extend({ ...decision, rounds: 1.5 }, 2);
+  extend(decision);
+  assert.equal(f.cli(['workflow', 'status', '--topic', 'topic']).status, 'active');
+  f.write('src/index.js', 'export default true;');
+  cleanEvidence(f);
+  assert.equal(f.evidence('review', cleanReview(), 2).error !== undefined, true); // The extension allows exactly one more round.
+  f.evidence('checkpoints', checkpoints(['verifier-0', 'verifier-1']));
+  const done = f.cli(['workflow', 'finish', '--topic', 'topic']);
+  assert.equal(done.ok, true); assert.equal(done.rounds, 4);
+  const run = JSON.parse(f.read('harness/thoughts/topic/run.json'));
+  assert.equal(run.extensions.length, 1); assert.equal(run.extensions[0].data.userResponse, decision.userResponse);
+  extend(decision, 2); // A completed run cannot be extended.
+});
+test('the user can accept only confirmed low findings at the review limit', t => {
+  const f = fixture(t); start(f);
+  const accept = (data, expected = 0) => f.cli(['workflow', 'accept', '--topic', 'topic', '--file', f.input(data)], expected);
+  const decision = { userResponse: 'Accept F2 as a follow-up', reason: 'Cosmetic issue for a later slice' };
+  const mixed = () => {
+    const review = findingReview(['confirm', 'dismiss']);
+    review.reviewers[0].findings.push({ id: 'F2', description: 'src/index.js:2 message wording', severity: 'low', votes: [{ verifier: 'verifier-0', verdict: 'confirm', reason: 'Seen in output' }, { verifier: 'verifier-1', verdict: 'confirm', reason: 'Seen in output' }] });
+    return review;
+  };
+  f.evidence('review', mixed());
+  accept({ ...decision, findings: ['F2'] }, 2); // Not at the limit yet.
+  f.evidence('review', mixed()); f.evidence('review', mixed());
+  accept({ ...decision, findings: ['F1'] }, 2); // F1 is medium.
+  accept({ ...decision, findings: ['F9'] }, 2); // Unknown finding.
+  accept({ userResponse: 'Yes', findings: ['F2'] }, 2); // A reason is required.
+  accept({ ...decision, findings: ['F2'] });
+  accept({ ...decision, findings: ['F2'] }, 2); // One acceptance for each round.
+  let status = f.cli(['workflow', 'status', '--topic', 'topic']);
+  assert.equal(status.status, 'blocked'); // F1 (medium, disputed) still blocks.
+  assert.equal(status.checks.find(c => c.id === 'workflow.review').ok, false);
+  // A round whose only unresolved finding is low becomes clean after acceptance.
+  const g = fixture(t); start(g);
+  const lowOnly = () => { const review = cleanReview(); review.reviewers[1].findings.push({ id: 'L1', description: 'src/a.js:1 log wording', severity: 'low', votes: [{ verifier: 'verifier-0', verdict: 'confirm', reason: 'Seen' }, { verifier: 'verifier-1', verdict: 'dismiss', reason: 'Not seen' }] }); return review; };
+  for (let i = 0; i < 3; i++) g.evidence('review', lowOnly());
+  assert.equal(g.cli(['workflow', 'status', '--topic', 'topic']).status, 'blocked');
+  g.cli(['workflow', 'accept', '--topic', 'topic', '--file', g.input({ userResponse: 'Accept L1', reason: 'Follow-up', findings: ['L1'] })]);
+  status = g.cli(['workflow', 'status', '--topic', 'topic']);
+  assert.equal(status.status, 'active'); assert.equal(status.checks.find(c => c.id === 'workflow.review').ok, true);
+  assert.deepEqual(JSON.parse(g.read('harness/thoughts/topic/run.json')).rounds[2].accepted.findings, ['L1']);
+});
 test('checkpoint coverage includes all reviewers and verifiers', t => {
   const f = fixture(t); start(f); f.evidence('review', findingReview(['dismiss', 'dismiss']));
   assert.equal(f.cli(['workflow', 'status', '--topic', 'topic']).checks.find(c => c.id === 'workflow.checkpoints').ok, false);
@@ -357,6 +410,10 @@ test('hooks request approval, protect history, bound stop retries, and respect s
   const f = fixture(t); f.art('plan', '# Plan'); f.cli(['workflow', 'start', '--topic', 'topic', '--session', 'one']);
   const call = (event, data) => f.cli(['hook', '--event', event], 0, data);
   assert.equal(call('PreToolUse', { session_id: 'one', tool_input: { command: 'node harness/.runtime/spec100.cjs workflow approve --topic topic --file /tmp/a.json' } }).hookSpecificOutput.permissionDecision, 'ask');
+  for (const action of ['extend', 'accept']) {
+    assert.equal(call('PreToolUse', { session_id: 'one', tool_input: { command: `node harness/.runtime/spec100.cjs workflow ${action} --topic topic --file /tmp/a.json` } }).hookSpecificOutput.permissionDecision, 'ask', action);
+    assert.equal(call('PreToolUse', { session_id: 'one', tool_input: { command: `echo x; node harness/.runtime/spec100.cjs workflow ${action} --topic topic --file /tmp/a.json` } }).hookSpecificOutput.permissionDecision, 'ask', `compound ${action}`);
+  }
   assert.equal(call('PreToolUse', { session_id: 'one', tool_input: { file_path: path.join(f.root, 'harness/learnings.md') } }).hookSpecificOutput.permissionDecision, 'deny');
   f.evidence('capabilities', capabilities());
   assert.equal(call('PreToolUse', { session_id: 'one', tool_input: { command: 'git reset --hard' } }).hookSpecificOutput.permissionDecision, 'ask');
@@ -884,7 +941,7 @@ test('setup upgrades a 2.0.0 installation and replaces launchers for another pat
   f.setup();
   const upgraded = JSON.parse(f.read('.claude/settings.json'));
   for (const event of ['SessionStart', 'PreToolUse', 'PostToolUse', 'Stop']) assert.equal(upgraded.hooks[event].length, 1, event);
-  assert.equal(JSON.parse(f.read('harness/.runtime/manifest.json')).version, '2.4.0');
+  assert.equal(JSON.parse(f.read('harness/.runtime/manifest.json')).version, '2.5.0');
   assert.equal(f.cli(['check']).ok, true);
 });
 

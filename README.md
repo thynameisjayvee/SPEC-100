@@ -77,7 +77,7 @@ Text comparisons and evidence fingerprints treat CRLF and LF line endings as equ
 
 ## Gates and native activation
 
-Software implementation requires baseline and final verification, independent code/security review, two independent verifier votes per finding, risk assessment, explicit approval for high-risk actions, applicable UAT evidence, and detection/rollback steps. The initial review counts as round one; unresolved findings after three rounds leave a blocked handoff.
+Software implementation requires baseline and final verification, independent code/security review, two independent verifier votes per finding, risk assessment, explicit approval for high-risk actions, applicable UAT evidence, and detection/rollback steps. The initial review counts as round one. The default limit is three rounds; at the limit the user can approve more rounds (`workflow extend`) or accept confirmed low findings as recorded follow-ups (`workflow accept`). Otherwise unresolved findings leave a blocked handoff.
 
 Before implementation, inspect the active client's native hook manager and independent-agent tools. Record the actual result as capability evidence using the [runtime protocol](skills/spec100-setup/assets/templates/protocol.md). Missing required capabilities block implementation. File existence does not establish native trust or activation.
 
@@ -149,6 +149,8 @@ node <bundled-runtime> setup --root <project> --draft <temporary-json> --tool co
 Add `--router on` or `--router off` to the same command to change the per-turn router. The setup skill supplies actual quoted paths and the evidence-based draft. Remove `--dry-run` only when setup is requested. With no tool option, setup retains installed integrations or defaults a new project to Claude.
 
 To upgrade from 2.0.0 to 2.1.0, run setup again. Setup replaces the old hook commands, which contained an absolute project path. The changed hook configuration makes capability evidence of active runs stale, so record capability evidence again. Evidence for a file that contains CRLF line endings, or a tracked file in an excluded folder such as `build/` or `vendor/`, also becomes stale once. Review rounds are kept.
+
+To upgrade to 2.5.0, run setup again. Version 2.5.0 adds `workflow extend` and `workflow accept`. A run that is blocked at the review limit, also one blocked by an earlier version, can continue after the user approves more review rounds or accepts its confirmed low findings. The changed rules and skills make capability evidence of active runs stale, so record capability evidence again.
 
 Version 1 manifests are treated as Claude installations. Known generated templates migrate automatically. Existing owned links become regular wrappers. Customized legacy skills or rules with Claude-specific instructions require a targeted manual migration; setup reports the exact file and stops before any writes. Preserve those custom instructions when updating tool-specific wording. Migration preserves evidence records and review counts, but changes to installed instructions can make current evidence stale.
 
